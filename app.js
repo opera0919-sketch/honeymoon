@@ -197,7 +197,7 @@ function drawMap() {
   const routeStops = stops.filter(s => !s.skip);
   if (routeStops.length > 1) L.polyline(routeStops.map(s => [s.lat, s.lng]), { color: cityColor, weight: 4, opacity: .75, dashArray: "1 8", lineCap: "round" }).addTo(layer);
   stops.forEach((s, i) => {
-    const it = s.items[0]; const isNow = live && s.items.some(x => x.s <= t && t < (x.e ?? x.s)); const isPast = s.done || live && s.items.every(x => (x.e ?? x.s) < t);
+    const it = s.items[0]; const isNow = S.tab === "today" && S.focus != null ? i === S.focus : live && s.items.some(x => x.s <= t && t < (x.e ?? x.s)); const isPast = s.done || live && s.items.every(x => (x.e ?? x.s) < t);
     const hotel = s.cat === "hotel"; const k = TYPE[it.t]?.[1] === "var(--city)" ? cityColor : getVar(TYPE[it.t]?.[1]);
     const icon = L.divIcon({ className: "", html: `<div class="pin ${hotel ? "hotel" : ""} ${isNow ? "is-now" : ""} ${isPast ? "done" : ""} ${s.skip ? "skip" : ""}" style="--k:${k}">${hotel ? "숙" : i + 1}</div>`, iconSize: isNow ? [38, 38] : [30, 30], iconAnchor: isNow ? [19, 19] : [15, 15] });
     const m = L.marker([s.lat, s.lng], { icon, title: s.label, zIndexOffset: isNow ? 1000 : 0 }).addTo(layer);
@@ -286,14 +286,15 @@ function timeline(day, live) {
 const sunLine = (ss, tz) => `<div class="sunline"><span class="tm">${hm(ss, tz)}</span><span class="rail"><i></i></span><span style="display:flex;gap:8px;align-items:center">일몰<span class="ln" style="flex:1"></span></span></div>`;
 
 /* 하루 진행 점: 지도 핀 번호와 같은 번호. 누르면 그 장소 상세 */
-function dayDots(day, t) {
+function dayDots(day, t, fi) {
   const st = dayStops(day); if (st.length < 2) return "";
   const end = s => Math.max(...s.items.map(x => x.e ?? x.s)), start = s => Math.min(...s.items.map(x => x.s));
   let ci = st.findIndex(s => s.items.some(x => x.s <= t && t < (x.e ?? x.s)));
   if (ci < 0) ci = st.findIndex(s => start(s) > t);
   const spots = st.filter(s => s.cat !== "hotel"); const curSpot = ci >= 0 ? st.slice(0, ci + 1).filter(s => s.cat !== "hotel").length : spots.length;
-  const dots = st.map((s, i) => { const past = s.done || end(s) < t && i !== ci; const cls = s.skip ? "skip" : i === ci ? "cur" : past ? "past" : "";
-    return `<button class="d ${cls}" data-item="${s.items[0].id}" aria-label="${i + 1}번 ${esc(s.label)} 보기">${s.cat === "hotel" ? "숙" : i + 1}</button>`; }).join("<b></b>");
+  const sel = fi != null ? fi : ci;
+  const dots = st.map((s, i) => { const past = s.done || end(s) < t && i !== ci; const cls = (s.skip ? "skip" : i === sel ? "cur" : past ? "past" : "") + (fi != null && i === ci ? " live" : "");
+    return `<button class="d ${cls}" data-hfocus="${i === ci ? -1 : i}" aria-pressed="${i === sel}" aria-label="${i + 1}번 ${esc(s.label)}${i === ci ? " (지금)" : ""} 단계 보기">${s.cat === "hotel" ? "숙" : i + 1}</button>`; }).join("<b></b>");
   const done = spots.filter(s => s.done || end(s) < t).length;
   return `<div class="dots-h"><span>오늘 동선 ${Math.min(curSpot, spots.length)} / ${spots.length}</span><span>${done}개 지났어요</span></div><div class="dots">${dots}</div>`;
 }
@@ -361,22 +362,28 @@ function stageList(day, live) {
 /* ── 오늘 ── */
 function viewToday() {
   const ph = phase(), t = now(); const day = ph === "during" && !S.sim ? days()[curDayIdx()] : selDay(); setCity(day); const live = isLive(day);
-  const items = allItems(); const cur = items.find(it => it.s <= t && t < (it.e ?? it.s)); const nxt = items.find(it => it.s > t);
+  const items = allItems(); let cur = items.find(it => it.s <= t && t < (it.e ?? it.s)); let nxt = items.find(it => it.s > t);
   let hero = "";
   if (ph === "before" && !S.sim) { const f = items[0]; hero = `<section class="now"><span class="lbl">출국까지</span><h2>${dur(f.s - t)}</h2><span class="sub">${md(days()[0].date)} ${hm(f.s, f.tz)} · ${esc(f.ti)}</span>
       <div class="acts"><button class="btn sm" data-sim-open>여행 중 화면 미리보기</button></div></section>`; }
   else if (ph === "after" && !S.sim) hero = `<section class="now"><span class="lbl">여행 완료</span><h2>13일 동안 수고하셨습니다</h2></section>`;
   else {
     const MOVE = ["flight", "train", "transfer", "checkin", "checkout"];
+    /* 번호를 누르면 메인 카드가 그 단계로 바뀜 (S.focus = 동선 번호 index) */
+    const st = dayStops(day); const fs = S.focus != null ? st[S.focus] : null; if (!fs) S.focus = null;
+    let fEnd = 0;
+    if (fs) { const di = day.items || []; fEnd = Math.max(...fs.items.map(x => x.e ?? x.s)); const lastIdx = Math.max(...fs.items.map(x => di.indexOf(x)));
+      cur = fs.items[0]; nxt = di[lastIdx + 1] || null; }
     const tgt = cur && !MOVE.includes(cur.t) ? cur : null; const isDone = tgt?.st === "done";
     const before = nxt ? [...(day.items || [])].reverse().find(x => x.s < nxt.s && hasLL(x)) : null;
     const from = cur && hasLL(cur) ? cur : before;
-    hero = `<section class="now ${isDone ? "is-done" : ""}"><div class="lbl-row"><span class="lbl">${cur ? (isDone ? "방문 완료 · 다음 장소로" : "지금") : "다음 일정까지 여유 시간"}</span>${S.sim ? `<button class="mini" data-sim-off>미리보기 끝내기</button>` : ""}</div>
+    const lbl = fs ? `${S.focus + 1}번 단계 · ${fEnd <= t ? "지난 일정" : "예정"}` : cur ? (isDone ? "방문 완료 · 다음 장소로" : "지금") : "다음 일정까지 여유 시간";
+    hero = `<section class="now ${isDone ? "is-done" : ""} ${fs ? "is-focus" : ""}"><div class="lbl-row"><span class="lbl">${lbl}</span>${fs ? `<button class="mini" data-hfocus="-1">지금으로 돌아가기</button>` : S.sim ? `<button class="mini" data-sim-off>미리보기 끝내기</button>` : ""}</div>
       ${cur ? `<button class="h2btn" data-item="${cur.id}"><h2>${esc(cur.ti)}</h2><span class="sub">${hm(cur.s, cur.tz)}–${hm(cur.e, cur.etz || cur.tz)}${cur.pl && cur.pl !== cur.ti ? " · " + esc(cur.pl) : ""}</span></button>` : `<h2>${nxt ? esc(nxt.ti) + " 준비" : "오늘 일정을 마쳤습니다"}</h2>`}
       ${tgt ? `<div class="acts">${isDone ? `<span class="done-chip">✓ 방문 완료</span><button class="btn sm" data-hst="${tgt.id}:planned">되돌리기</button>` : `<button class="btn sm solid" data-hst="${tgt.id}:done">✓ 방문 완료</button>`}</div>` : ""}
       ${heroBar(day, t, live)}
-      ${dayDots(day, t)}
-      ${nxt ? `<div class="next"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}</b></div><div class="count">${dur(nxt.s - t)} 뒤</div></div>` : ""}
+      ${dayDots(day, t, fs ? S.focus : null)}
+      ${nxt ? `<div class="next"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}${nxt.t === "meal" && nxt.pl ? " · " + esc(nxt.pl) : ""}</b></div><div class="count">${fs ? (nxt.s - fEnd >= 60 ? `여유 ${dur(nxt.s - fEnd)}` : "") : `${dur(nxt.s - t)} 뒤`}</div></div>` : ""}
       <div class="mapcard hero-map"><div id="map-slot" style="position:absolute;inset:0"></div></div>
       ${nxt ? legHTML(day, from, nxt) : ""}</section>`;
   }
@@ -693,13 +700,14 @@ function openNearMe() {
 
 /* ── 이벤트 ── */
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del]");
+  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus]");
   if (!el) return;
   const ds = el.dataset;
-  if (ds.tab) { S.tab = ds.tab; S.editId = null; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
+  if (ds.tab) { S.tab = ds.tab; S.editId = null; S.focus = null; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
   if (ds.goto) { if (ds.gday != null) S.sel = +ds.gday; else if (S.tab === "today" && phase() === "during") S.sel = curDayIdx(); S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; closeSheet(); render(); window.scrollTo(0, 0); return; }
-  if (ds.day != null) { S.sel = +ds.day; S.editId = null; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
+  if (ds.day != null) { S.sel = +ds.day; S.editId = null; S.focus = null; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
   if (ds.step) { S.sel = Math.min(days().length - 1, Math.max(0, S.sel + +ds.step)); render(); window.scrollTo(0, 0); return; }
+  if (ds.hfocus != null) { S.focus = +ds.hfocus < 0 ? null : +ds.hfocus; render(); return; }
   if (ds.hst) { const [i, st] = ds.hst.split(":"); saveStatus(+i, st, false); return; }
   if (ds.nearMe != null) { openNearMe(); return; }
   if (ds.st) { const [i, st] = ds.st.split(":"); saveStatus(+i, st); return; }
@@ -723,7 +731,7 @@ document.addEventListener("click", async e => {
   if (ds.reload != null) { await load(false); return; }
   if (ds.logout != null) { try { await initSb()?.auth.signOut(); } catch (err) {} S.data = null; S.source = "login"; try { localStorage.removeItem(CACHE_KEY); } catch (err) {} render(); return; }
   if (ds.simOpen != null) { const i = 3; const d = days()[i]; S.sim = midnight(d.date, d.tz) + 14 * 3600; S.sel = i; render(); toast("Day 4 오후 2시로 미리보기 중입니다"); return; }
-  if (ds.simOff != null) { S.sim = null; S.sel = null; render(); return; }
+  if (ds.simOff != null) { S.focus = null; S.sim = null; S.sel = null; render(); return; }
 });
 document.addEventListener("change", e => { const el = e.target;
   if (el.dataset.todo) saveTodo(+el.dataset.todo, el.checked);

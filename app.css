@@ -455,3 +455,5 @@ body{line-height:1.6}
 .iform .field label small{font-weight:500}
 .iform .field input,.iform .field select,.iform .field textarea{padding:11px 12px}
 .iform .acts{display:flex;gap:8px;align-items:center}
+.now .dots .d.live:not(.cur){box-shadow:0 0 0 3px color-mix(in srgb,#FFD166 85%,transparent)}
+.now.is-focus .lbl{display:inline-flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--on-city) 16%,transparent);padding:3px 10px;border-radius:999px;opacity:1}
