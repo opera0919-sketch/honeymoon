@@ -38,10 +38,10 @@ const WD = ["일", "월", "화", "수", "목", "금", "토"];
 
 const S = {
   data: null, source: "", user: null, tab: "today", sel: null, sim: null, simKey: "",
-  infoTab: "book", dineFilter: "all", memoFilter: "all", travelMode: "walking",
+  infoTab: "book", dineFilter: "day", memoFilter: "all", travelMode: "walking",
   sheet: null, editingMemo: null, lastLoad: 0, loading: false
 };
-const ui0 = ls.get(UI_KEY); if (ui0) Object.assign(S, { tab: ui0.tab || "today", infoTab: ui0.infoTab || "book", dineFilter: ui0.dineFilter || "all", travelMode: ui0.travelMode || "walking" });
+const ui0 = ls.get(UI_KEY); if (ui0) Object.assign(S, { tab: ui0.tab || "today", infoTab: ui0.infoTab || "book", dineFilter: ["day", "open", "all"].includes(ui0.dineFilter) ? ui0.dineFilter : "day", travelMode: ui0.travelMode || "walking" });
 const saveUI = () => ls.set(UI_KEY, { tab: S.tab, infoTab: S.infoTab, dineFilter: S.dineFilter, travelMode: S.travelMode });
 
 /* ── 시간 ── */
@@ -165,7 +165,8 @@ let map = null, mapEl = null, layer = null, markerById = {}, tileLayer = null;
 const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
 function ensureMap() {
   if (!window.L) return null;
-  if (!mapEl) { mapEl = document.createElement("div"); mapEl.id = "map"; }
+  /* 분리된 요소에 L.map을 만들면 Leaflet이 position:relative를 인라인으로 박아 높이가 0이 된다 → 미리 절대 위치 지정 */
+  if (!mapEl) { mapEl = document.createElement("div"); mapEl.id = "map"; mapEl.style.cssText = "position:absolute;inset:0"; }
   if (!map) {
     map = L.map(mapEl, { zoomControl: false, attributionControl: true, tap: true });
     L.control.zoom({ position: "topright" }).addTo(map);
@@ -197,7 +198,7 @@ function drawMap() {
   stops.forEach((s, i) => {
     const it = s.items[0]; const isNow = live && s.items.some(x => x.s <= t && t < (x.e ?? x.s)); const isPast = s.done || live && s.items.every(x => (x.e ?? x.s) < t);
     const hotel = s.cat === "hotel"; const k = TYPE[it.t]?.[1] === "var(--city)" ? cityColor : getVar(TYPE[it.t]?.[1]);
-    const icon = L.divIcon({ className: "", html: `<div class="pin ${hotel ? "hotel" : ""} ${isNow ? "now" : ""} ${isPast ? "done" : ""} ${s.skip ? "skip" : ""}" style="--k:${k}">${hotel ? "숙" : i + 1}</div>`, iconSize: isNow ? [38, 38] : [30, 30], iconAnchor: isNow ? [19, 19] : [15, 15] });
+    const icon = L.divIcon({ className: "", html: `<div class="pin ${hotel ? "hotel" : ""} ${isNow ? "is-now" : ""} ${isPast ? "done" : ""} ${s.skip ? "skip" : ""}" style="--k:${k}">${hotel ? "숙" : i + 1}</div>`, iconSize: isNow ? [38, 38] : [30, 30], iconAnchor: isNow ? [19, 19] : [15, 15] });
     const m = L.marker([s.lat, s.lng], { icon, title: s.label, zIndexOffset: isNow ? 1000 : 0 }).addTo(layer);
     m.on("click", () => openItem(it.id));
     s.items.forEach(x => markerById[x.id] = m);
@@ -235,13 +236,6 @@ function header() {
     <div class="days" role="tablist" aria-label="여행 날짜">${ds.map((x, i) => { const dt = new Date(x.date + "T12:00:00Z");
       return `<button class="day ${i === ci ? "today" : ""} ${i < ci ? "past" : ""}" style="--c:${CITY_VAR[x.city]}" data-day="${i}" role="tab" aria-current="${i === S.sel}" aria-label="Day ${x.n} ${mdShort(x.date)} ${x.city}"><small>${WD[dt.getUTCDay()]}</small><b>${dt.getUTCDate()}</b><i></i></button>`; }).join("")}</div></header>`;
 }
-function stripHTML(day, live) {
-  const base = midnight(day.date, day.tz), H0 = 6, H1 = 24, span = (H1 - H0) * 3600; const pos = e => Math.min(100, Math.max(0, (e - base - H0 * 3600) / span * 100));
-  const ss = daySunset(day); let h = `<div class="strip" aria-hidden="true"><div class="night" style="left:${pos(ss)}%"></div>`;
-  (day.items || []).forEach(it => { if (it.s == null) return; const a = pos(it.s), b = pos(it.e ?? it.s + 1800); if (b <= 0 || a >= 100) return; h += `<span class="seg" style="left:${a}%;width:${Math.max(.7, b - a)}%;--k:${TYPE[it.t]?.[1] || "var(--free)"}"></span>`; });
-  const t = now(); if (live && t >= base + H0 * 3600 && t <= base + H1 * 3600) h += `<span class="nowl" style="left:${pos(t)}%"></span>`;
-  return h + `</div><div class="axis">${[6, 9, 12, 15, 18, 21, 24].map(x => `<span style="left:${(x - H0) / (H1 - H0) * 100}%">${x}시</span>`).join("")}</div>`;
-}
 function mapCard(day) {
   const stops = localCluster(dayStops(day).filter(s => !s.skip)); const urls = gDirUrls(stops, S.travelMode);
   return `<div class="mapcard">
@@ -252,10 +246,24 @@ function mapCard(day) {
   </div>`;
 }
 function timeline(day, live) {
-  const t = now(), ss = daySunset(day); let out = `<div class="tl">`, prevEnd = null, ssShown = false; const items = day.items || [];
+  const t = now(), ss = daySunset(day); let out = `<div class="tl">`, prevEnd = null, ssShown = false;
+  const ms = mealSlots(day); const base = midnight(day.date, day.tz);
+  /* 일정에 식사 항목이 없는 끼니는 기본 시각(점심 12:30, 저녁 19:30)에 끼워 넣음 */
+  const vir = ms.filter(m => !m.it).map(m => ({ vir: m, s: base + (m.sl.meal === "lunch" ? 12.5 : m.sl.meal === "breakfast" ? 8.5 : 19.5) * 3600 }));
+  const items = [...(day.items || []), ...vir].sort((a, b) => a.s - b.s);
   const stops = dayStops(day); const numOf = {}; stops.forEach((s, i) => s.items.forEach(x => numOf[x.id] = s.cat === "hotel" ? "숙" : i + 1));
   items.forEach(it => {
     if (!ssShown && it.s > ss) { out += sunLine(ss, day.tz); ssShown = true; }
+    if (it.vir) { const { sl, ch } = it.vir;
+      out += `<div class="stop dot ${ch ? "" : "undec"}" style="--k:var(--meal)"><div class="tm"><b>${MEAL[sl.meal]}</b><small></small></div><div class="rail"><span class="num"></span></div>
+        <div class="body">${ch ? `<button class="row-btn" data-dine="${sl.sid}:${ch.id}"><span class="tx"><b>${MEAL[sl.meal]} · ${esc(ch.n)}</b><span class="tags">${pill("고른 식당", "p-ok")}${pill(RES[ch.r][0], RES[ch.r][1])}</span></span><span class="chev">${SVG.chev}</span></button>`
+          : `<button class="row-btn" data-goto="dine"><span class="tx"><b>${MEAL[sl.meal]} · 아직 정하지 않았어요</b><span>후보 ${sl.o.length}곳 · 눌러서 고르기</span></span><span class="chev">${SVG.chev}</span></button>`}</div></div>`;
+      return; }
+    const msl = it.t === "meal" ? ms.find(m => m.it === it) : null;
+    if (msl?.ch) { const { sl, ch } = msl; const isNow = live && it.s <= t && t < (it.e ?? it.s); const isPast = it.st === "done" || live && (it.e ?? it.s) < t;
+      out += `<div class="stop dot ${isNow ? "is-now" : ""} ${isPast ? "past" : ""}" style="--k:var(--meal)"><div class="tm"><b>${hm(it.s, it.tz)}</b><small>${it.e ? hm(it.e, it.tz) : ""}</small></div><div class="rail"><span class="num"></span></div>
+        <div class="body"><button class="row-btn" data-dine="${sl.sid}:${ch.id}"><span class="tx"><b>${esc(it.ti)} · ${esc(ch.n)}</b>${it.pl && it.pl !== ch.n ? `<span>처음 계획: ${esc(it.pl)}</span>` : ""}<span class="tags">${pill("고른 식당", "p-ok")}${pill(RES[ch.r][0], RES[ch.r][1])}</span></span><span class="chev">${SVG.chev}</span></button></div></div>`;
+      prevEnd = it.e ?? it.s; return; }
     if (prevEnd != null && it.s - prevEnd >= 1800) out += `<div class="gap">${dur(it.s - prevEnd)} 여유</div>`;
     const k = TYPE[it.t]?.[1] || "var(--free)"; const isNow = live && it.s <= t && t < (it.e ?? it.s); const isPast = it.st === "done" || live && (it.e ?? it.s) < t; const isSkip = it.st === "skipped";
     const bks = (it.b || []).map(booking).filter(Boolean); const tg = itemTags(it); const mc = memosFor(it).length;
@@ -265,7 +273,7 @@ function timeline(day, live) {
       .concat(mc ? [pill(`메모 ${mc}`, "p-city")] : []).join("");
     const endTz = it.etz || it.tz; const endTxt = it.e != null ? hm(it.e, endTz) + (ymd(it.e, endTz) !== ymd(it.s, it.tz) ? "+1" : "") : "";
     const num = numOf[it.id];
-    out += `<div class="stop ${num ? "" : "dot"} ${isNow && !isSkip ? "now" : ""} ${isPast ? "past" : ""} ${isSkip ? "skip" : ""}" style="--k:${k}">
+    out += `<div class="stop ${num ? "" : "dot"} ${isNow && !isSkip ? "is-now" : ""} ${isPast ? "past" : ""} ${isSkip ? "skip" : ""}" style="--k:${k}">
       <div class="tm"><b>${hm(it.s, it.tz)}</b><small>${endTxt}${it.etz && it.etz !== it.tz ? " 현지" : ""}</small></div>
       <div class="rail"><span class="num">${num ?? ""}</span></div>
       <div class="body"><button class="row-btn" data-item="${it.id}"><span class="tx"><b>${esc(it.ti)}</b>${it.pl && it.pl !== it.ti ? `<span>${esc(it.pl)}${it.pll ? " · " + esc(it.pll) : ""}</span>` : (it.pll ? `<span>${esc(it.pll)}</span>` : "")}<span class="tags">${tags}</span></span><span class="chev">${SVG.chev}</span></button></div></div>`;
@@ -276,7 +284,7 @@ function timeline(day, live) {
 }
 const sunLine = (ss, tz) => `<div class="sunline"><span class="tm">${hm(ss, tz)}</span><span class="rail"><i></i></span><span style="display:flex;gap:8px;align-items:center">일몰<span class="ln" style="flex:1"></span></span></div>`;
 
-/* 하루 진행 점: 지도 핀 번호와 같은 번호 */
+/* 하루 진행 점: 지도 핀 번호와 같은 번호. 누르면 그 장소 상세 */
 function dayDots(day, t) {
   const st = dayStops(day); if (st.length < 2) return "";
   const end = s => Math.max(...s.items.map(x => x.e ?? x.s)), start = s => Math.min(...s.items.map(x => x.s));
@@ -284,59 +292,114 @@ function dayDots(day, t) {
   if (ci < 0) ci = st.findIndex(s => start(s) > t);
   const spots = st.filter(s => s.cat !== "hotel"); const curSpot = ci >= 0 ? st.slice(0, ci + 1).filter(s => s.cat !== "hotel").length : spots.length;
   const dots = st.map((s, i) => { const past = s.done || end(s) < t && i !== ci; const cls = s.skip ? "skip" : i === ci ? "cur" : past ? "past" : "";
-    return `<i class="${cls}" title="${esc(s.label)}">${s.cat === "hotel" ? "숙" : i + 1}</i>`; }).join("<b></b>");
+    return `<button class="d ${cls}" data-item="${s.items[0].id}" aria-label="${i + 1}번 ${esc(s.label)} 보기">${s.cat === "hotel" ? "숙" : i + 1}</button>`; }).join("<b></b>");
   const done = spots.filter(s => s.done || end(s) < t).length;
-  return `<div class="dots-h"><span>오늘 동선 ${Math.min(curSpot, spots.length)} / ${spots.length}</span><span>${done}곳 지남</span></div><div class="dots" aria-hidden="true">${dots}</div>`;
+  return `<div class="dots-h"><span>오늘 동선 ${Math.min(curSpot, spots.length)} / ${spots.length}</span><span>${done}곳 지남 · 번호를 누르면 상세</span></div><div class="dots">${dots}</div>`;
+}
+/* 메인 카드 안 시간대 진행바 (일정 시작~끝, 일몰 표시) */
+function heroBar(day, t, live) {
+  const its = (day.items || []).filter(it => it.s != null && it.tz !== "Asia/Seoul"); if (!its.length) return "";
+  const a = Math.min(...its.map(i => i.s)), b = Math.max(...its.map(i => i.e ?? i.s)); if (b <= a) return "";
+  const pos = e => Math.min(100, Math.max(0, (e - a) / (b - a) * 100)); const ss = daySunset(day);
+  const segs = its.map(it => { const x = pos(it.s), w = Math.max(.8, pos(it.e ?? it.s + 1800) - x); const on = it.st === "done" || live && (it.e ?? it.s) <= t; const cur = live && it.s <= t && t < (it.e ?? it.s);
+    return `<i class="${cur ? "cur" : on ? "on" : ""} ${it.st === "skipped" ? "skip" : ""}" style="left:${x}%;width:${w}%"></i>`; }).join("");
+  const nowL = live && t >= a && t <= b ? `<span class="nowl" style="left:${pos(t)}%"></span>` : "";
+  const ssM = ss > a && ss < b ? `<span class="ssm" style="left:${pos(ss)}%" title="일몰"></span>` : "";
+  return `<div class="hbar" aria-hidden="true"><div class="trk">${segs}${ssM}${nowL}</div><div class="hx"><span>${hm(a, its[0].tz)} 시작</span>${ss > a && ss < b ? `<span class="ss"><i></i>일몰 ${hm(ss, day.tz)}</span>` : ""}<span>끝 ${hm(b, its[its.length - 1].etz || its[its.length - 1].tz)}</span></div></div>`;
+}
+/* 두 지점 사이 이동 추천 (직선거리 기반) */
+function kmBetween(a, b) { const R = 6371, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r; const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); }
+const hasLL = x => x && x.lat != null && x.lng != null;
+function legHTML(day, from, to) {
+  if (!to) return "";
+  const MOVE = ["flight", "train", "transfer"];
+  if (MOVE.includes(to.t)) return `<div class="leg2"><span class="ic">${SVG.route}</span><span class="tx"><b>${esc(to.ti)}</b><span>${hm(to.s, to.tz)} 출발${to.e ? ` · ${dur(to.e - to.s)} 소요` : ""}</span></span>${hasLL(to) ? `<a class="btn sm" href="${esc(gNavUrl(to, to.t === "transfer" ? "driving" : "transit"))}" target="_blank" rel="noopener">${SVG.nav}경로</a>` : ""}</div>`;
+  if (!hasLL(to)) return to.pl ? `<div class="leg2"><span class="ic">${SVG.nav}</span><span class="tx"><b>${esc(to.pl)}</b><span>좌표가 없어 이동 시간을 계산하지 못했습니다</span></span><a class="btn sm" href="${esc(gNavUrl(to))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a></div>` : "";
+  const o = hasLL(from) ? from : null;
+  const p = new URLSearchParams({ api: "1", destination: `${to.lat},${to.lng}` }); if (o) p.set("origin", `${o.lat},${o.lng}`);
+  if (!o) { p.set("travelmode", "walking"); return `<div class="leg2"><span class="ic">${SVG.nav}</span><span class="tx"><b>${esc(to.pl || to.ti)}까지</b><span>현재 위치에서 경로를 확인하세요</span></span><a class="btn sm" href="https://www.google.com/maps/dir/?${p.toString().replace(/%2C/g, ",")}" target="_blank" rel="noopener">${SVG.nav}경로</a></div>`; }
+  const km = kmBetween(o, to); if (km < .08) return "";
+  const walk = km <= 1.6, mins = Math.round(km * 1.3 * 1000 / 75); p.set("travelmode", walk ? "walking" : "transit");
+  const leave = walk ? to.s - (mins + 5) * 60 : null;
+  return `<div class="leg2"><span class="ic">${walk ? "🚶" : "🚇"}</span><span class="tx"><b>${walk ? `도보 약 ${mins}분` : "대중교통·택시 추천"} <small>· 직선 ${km < 1 ? Math.round(km * 1000) + "m" : km.toFixed(1) + "km"}</small></b><span>${leave ? `${hm(leave, to.tz)}쯤 출발 · ` : ""}${esc(o.pl || o.ti)} → ${esc(to.pl || to.ti)}</span></span><a class="btn sm" href="https://www.google.com/maps/dir/?${p.toString().replace(/%2C/g, ",")}" target="_blank" rel="noopener">${SVG.route}경로</a></div>`;
+}
+/* 끼니 슬롯 ↔ 일정의 식사 항목 */
+const mealOf = it => { const h = +hm(it.s, it.tz).slice(0, 2); return h < 11 ? "breakfast" : h < 16 ? "lunch" : "dinner"; };
+function mealSlots(day) {
+  const items = day.items || [];
+  return (day.dining || []).map(sl => { const ch = (sl.o || []).find(o => o.status === "chosen"); const it = items.find(i => i.t === "meal" && mealOf(i) === sl.meal);
+    return { sl, ch, it, decided: !!(ch || it?.pl) }; });
+}
+function mealBands(day) {
+  return mealSlots(day).filter(m => !m.decided).map(m => `<button class="band warn" data-goto="dine"><span class="bd-dot"></span><span class="tx"><b>${MEAL[m.sl.meal]} 장소를 아직 정하지 않았어요</b><span>후보 ${m.sl.o.length}곳 중에서 골라 주세요</span></span><span class="go">고르기${SVG.chev}</span></button>`).join("");
+}
+/* 그날 챙길 것 */
+function dayChecks(day, live) {
+  const t = now(); const dayInfo = (D().info || []).filter(x => x.from && x.from <= day.date && (x.to || x.from) >= day.date);
+  const ref = live ? t : Math.max(t, midnight(day.date, day.tz));
+  const todoDue = (D().todos || []).filter(td => td.due && td.due <= ref + 3 * 86400 && (!td.done || td.due >= ref - 86400));
+  const checked = id => (D().checks || []).some(c => c.day === day.id && c.info === id);
+  return { dayInfo, todoDue, checked, open: dayInfo.filter(x => !checked(x.id)).length + todoDue.filter(td => !td.done).length };
+}
+function checksCard(day, live, title) {
+  const { dayInfo, todoDue, checked } = dayChecks(day, live); if (!dayInfo.length && !todoDue.length) return "";
+  return `<div class="sec-h"><h2>${title}</h2></div><section class="card" style="margin:0 16px">${dayInfo.map(x => { const c = checked(x.id); return `<label class="chk ${c ? "done" : ""}"><span class="tx"><b>${esc(x.title)}</b><span>${esc(x.body)}</span></span><input type="checkbox" data-dcheck="${day.id}:${x.id}" ${c ? "checked" : ""} aria-label="${esc(x.title)} 확인"></label>`; }).join("")}${todoDue.map(td => `<label class="chk ${td.done ? "done" : ""}"><span class="tx"><b>${pill("할 일", "p-crit")} ${esc(td.title)}</b>${td.note ? `<span>${esc(td.note)}</span>` : ""}</span><input type="checkbox" data-todo="${td.id}" ${td.done ? "checked" : ""} aria-label="${esc(td.title)} 완료"></label>`).join("")}</section>`;
+}
+/* 오늘 탭: 단계별 핵심만 */
+function stageList(day, live) {
+  const t = now(); const ms = mealSlots(day); const chosenFor = it => ms.find(m => m.it === it)?.ch;
+  const rows = (day.items || []).map(it => { const isNow = live && it.s <= t && t < (it.e ?? it.s); const past = it.st === "done" || live && (it.e ?? it.s) <= t; const skip = it.st === "skipped"; const ch = it.t === "meal" ? chosenFor(it) : null;
+    const place = ch ? ch.n : (it.pl && it.pl !== it.ti ? it.pl : "");
+    return `<button class="stg ${isNow ? "is-now" : ""} ${past ? "past" : ""} ${skip ? "skip" : ""}" style="--k:${TYPE[it.t]?.[1] || "var(--free)"}" ${ch ? `data-dine="${ms.find(m => m.ch === ch).sl.sid}:${ch.id}"` : `data-item="${it.id}"`}>
+      <span class="tm">${hm(it.s, it.tz)}</span><span class="mk">${it.st === "done" ? "✓" : ""}</span><span class="tx"><b>${esc(it.ti)}</b>${place ? `<span>${esc(place)}</span>` : ""}</span>${isNow ? `<span class="pill p-city">지금</span>` : ""}</button>`; }).join("");
+  const vir = ms.filter(m => !m.it).map(m => m.ch ? `<button class="stg" style="--k:var(--meal)" data-dine="${m.sl.sid}:${m.ch.id}"><span class="tm">${MEAL[m.sl.meal]}</span><span class="mk"></span><span class="tx"><b>${esc(m.ch.n)}</b><span>고른 식당</span></span></button>` : "").join("");
+  return rows || vir ? `<section class="card stages" style="margin:0 16px">${rows}${vir}</section>` : `<div class="empty">이 날은 등록된 일정이 없습니다.</div>`;
 }
 /* ── 오늘 ── */
 function viewToday() {
-  const ph = phase(), t = now(); const day = selDay(); setCity(day); const live = isLive(day);
+  const ph = phase(), t = now(); const day = ph === "during" && !S.sim ? days()[curDayIdx()] : selDay(); setCity(day); const live = isLive(day);
   const items = allItems(); const cur = items.find(it => it.s <= t && t < (it.e ?? it.s)); const nxt = items.find(it => it.s > t);
   let hero = "";
   if (ph === "before" && !S.sim) { const f = items[0]; hero = `<section class="now"><span class="lbl">출국까지</span><h2>${dur(f.s - t)}</h2><span class="sub">${md(days()[0].date)} ${hm(f.s, f.tz)} · ${esc(f.ti)}</span>
       <div class="acts"><button class="btn sm" data-sim-open>여행 중 화면 미리보기</button></div></section>`; }
   else if (ph === "after" && !S.sim) hero = `<section class="now"><span class="lbl">여행 완료</span><h2>13일 동안 수고하셨습니다</h2></section>`;
   else {
-    hero = `<section class="now"><span class="lbl">${cur ? "지금" : "다음 일정까지 여유 시간"}</span>
-      ${cur ? `<h2>${esc(cur.ti)}</h2><span class="sub">${hm(cur.s, cur.tz)}–${hm(cur.e, cur.etz || cur.tz)}${cur.pl && cur.pl !== cur.ti ? " · " + esc(cur.pl) : ""}</span>` : `<h2>${nxt ? esc(nxt.ti) + " 준비" : "오늘 일정을 마쳤습니다"}</h2>`}
+    const MOVE = ["flight", "train", "transfer", "checkin", "checkout"];
+    const tgt = cur && !MOVE.includes(cur.t) ? cur : null; const isDone = tgt?.st === "done";
+    const before = nxt ? [...(day.items || [])].reverse().find(x => x.s < nxt.s && hasLL(x)) : null;
+    const from = cur && hasLL(cur) ? cur : before;
+    hero = `<section class="now ${isDone ? "is-done" : ""}"><div class="lbl-row"><span class="lbl">${cur ? (isDone ? "방문 완료 · 다음 장소로" : "지금") : "다음 일정까지 여유 시간"}</span>${S.sim ? `<button class="mini" data-sim-off>미리보기 끝내기</button>` : ""}</div>
+      ${cur ? `<button class="h2btn" data-item="${cur.id}"><h2>${esc(cur.ti)}</h2><span class="sub">${hm(cur.s, cur.tz)}–${hm(cur.e, cur.etz || cur.tz)}${cur.pl && cur.pl !== cur.ti ? " · " + esc(cur.pl) : ""}</span></button>` : `<h2>${nxt ? esc(nxt.ti) + " 준비" : "오늘 일정을 마쳤습니다"}</h2>`}
+      ${tgt ? `<div class="acts">${isDone ? `<span class="done-chip">✓ 방문 완료</span><button class="btn sm" data-hst="${tgt.id}:planned">되돌리기</button>` : `<button class="btn sm solid" data-hst="${tgt.id}:done">✓ 방문 완료</button>`}</div>` : ""}
+      ${heroBar(day, t, live)}
       ${dayDots(day, t)}
       ${nxt ? `<div class="next"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}</b></div><div class="count"><b>${dur(nxt.s - t)}</b><span>뒤</span></div></div>
-        <div class="acts">${nxt.lat != null || nxt.pl ? `<a class="btn sm" href="${esc(gNavUrl(nxt))}" target="_blank" rel="noopener">${SVG.nav}다음 장소 길찾기</a>` : ""}<button class="btn sm" data-item="${nxt.id}">자세히</button></div>` : ""}
-      ${S.sim ? `<div class="acts"><button class="btn sm" data-sim-off>미리보기 끝내기</button></div>` : ""}</section>`;
+        ${legHTML(day, from, nxt)}` : ""}</section>`;
   }
   const dl = items.find(it => ["flight", "train", "checkout"].includes(it.t) && it.s > t);
   let dlh = "";
   if (dl) { const left = dl.s - t, frac = Math.max(0, Math.min(1, left / (6 * 3600))), C = 2 * Math.PI * 24;
     dlh = `<section class="card deadline"><svg class="ring" viewBox="0 0 58 58" aria-hidden="true"><circle class="bgc" cx="29" cy="29" r="24"/><circle class="fg" cx="29" cy="29" r="24" stroke-dasharray="${C}" stroke-dashoffset="${C * frac}"/><text x="29" y="33" text-anchor="middle">${left < 86400 ? hm(dl.s, dl.tz) : "D-" + Math.ceil(left / 86400)}</text></svg>
       <div style="flex:1;min-width:0"><div class="small muted">다음 이동 · ${mdShort(dl.day.date)}</div><b>${esc(dl.ti)}</b><div class="small">${dur(left)} 남음${dl.t === "flight" ? " · 국제선 3시간, 유럽 내선 2시간 전 도착 권장" : ""}</div></div></section>`; }
-  const dayInfo = (D().info || []).filter(x => x.from && x.from <= day.date && (x.to || x.from) >= day.date);
-  const ref = live ? t : Math.max(t, midnight(day.date, day.tz));
-  const todoDue = (D().todos || []).filter(td => td.due && td.due <= ref + 3 * 86400 && (!td.done || td.due >= ref - 86400));
-  const checked = id => (D().checks || []).some(c => c.day === day.id && c.info === id);
-  const meals = (day.dining || []).map(sl => ({ sl, p: (sl.o || []).find(o => o.status === "chosen") }));
-  const dm = memosForDay(day);
-  return `${hero}${dlh}
-    ${mapCard(day)}
-    <section class="card" style="margin:12px 16px 0">${stripHTML(day, live)}<div class="keys" style="margin-top:6px">${KEYS.map(([n, c]) => `<span style="--k:${c}">${n}</span>`).join("")}<span style="--k:var(--warn)">일몰 ${hm(daySunset(day), day.tz)}</span></div></section>
-    ${dayInfo.length || todoDue.length ? `<div class="sec-h"><h2>오늘 챙길 것</h2></div><section class="card" style="margin:0 16px">${dayInfo.map(x => { const c = checked(x.id); return `<label class="chk ${c ? "done" : ""}"><span class="tx"><b>${esc(x.title)}</b><span>${esc(x.body)}</span></span><input type="checkbox" data-dcheck="${day.id}:${x.id}" ${c ? "checked" : ""} aria-label="${esc(x.title)} 확인"></label>`; }).join("")}${todoDue.map(td => `<label class="chk ${td.done ? "done" : ""}"><span class="tx"><b>${pill("할 일", "p-crit")} ${esc(td.title)}</b>${td.note ? `<span>${esc(td.note)}</span>` : ""}</span><input type="checkbox" data-todo="${td.id}" ${td.done ? "checked" : ""} aria-label="${esc(td.title)} 완료"></label>`).join("")}</section>` : ""}
-    ${meals.length ? `<div class="sec-h"><h2>식사</h2><button class="btn ghost sm" data-goto="dine">후보 보기</button></div><section class="card stack" style="margin:0 16px">${meals.map(({ sl, p }) => `<div style="display:flex;gap:10px;align-items:center"><span class="pill p-mute">${MEAL[sl.meal]}</span><span style="flex:1;min-width:0">${p ? `<b>${esc(p.n)}</b>` : `<span class="muted">후보 ${sl.o.length}곳 중 아직 고르지 않음</span>`}</span>${p ? `<button class="btn sm" data-dine="${sl.sid}:${p.id}">보기</button>` : `<button class="btn sm" data-goto="dine">고르기</button>`}</div>`).join("")}</section>` : ""}
-    <div class="sec-h"><h2>일정</h2><span>${(day.items || []).length}개${dm.length ? ` · 메모 ${dm.length}` : ""}</span></div>
-    ${timeline(day, live)}`;
+  const chk = dayChecks(day, live);
+  const bands = (chk.open ? `<button class="band crit" data-goto="plan"><span class="bd-dot"></span><span class="tx"><b>${ph === "before" && !S.sim ? "출발 전 챙겨야 할 것이" : "오늘 챙겨야 할 것이"} ${chk.open}개 있어요</b><span>일정 탭 맨 위에서 확인하고 체크해 주세요</span></span><span class="go">확인${SVG.chev}</span></button>` : "") + mealBands(day);
+  return `${hero}
+    ${bands ? `<div class="bands">${bands}</div>` : ""}
+    ${dlh}
+    <div class="sec-h"><h2>${ph === "before" && !S.sim ? "첫날 일정" : "오늘 일정"}</h2><button class="btn ghost sm" data-goto="plan">지도·전체 보기${SVG.chev}</button></div>
+    ${stageList(day, live)}`;
 }
 
 /* ── 일정 전체 ── */
 function viewPlan() {
-  const day = selDay(); setCity(day); const ci = curDayIdx(); const H0 = 6, H1 = 24;
-  const rows = days().map((d, i) => { const base = midnight(d.date, d.tz), span = (H1 - H0) * 3600; const pos = e => Math.min(100, Math.max(0, (e - base - H0 * 3600) / span * 100));
-    const segs = (d.items || []).map(it => { const a = pos(it.s), b = pos(it.e ?? it.s + 1800); return b > a ? `<span class="seg" style="left:${a}%;width:${Math.max(.8, b - a)}%;--k:${(TYPE[it.t]?.[1] || "var(--free)").replace("var(--city)", CITY_VAR[d.city])}"></span>` : ""; }).join("");
-    return `<div class="lab" style="${i === ci ? "color:var(--crit)" : ""}"><b>D${d.n}</b><small>${mdShort(d.date)}</small></div><button class="bar" style="--c:${CITY_VAR[d.city]}" data-day="${i}" aria-current="${i === S.sel}" aria-label="Day ${d.n} 보기">${segs}<span class="ss" style="left:${pos(daySunset(d))}%"></span></button>`; }).join("");
-  return `<div class="sec-h"><h2>13일 한눈에</h2><span>막대를 누르면 그날로 이동</span></div>
-    <section class="card" style="margin:0 16px"><div class="hm">${rows}<span></span><div class="axis">${[6, 12, 18, 24].map(x => `<span style="left:${(x - H0) / (H1 - H0) * 100}%">${x}시</span>`).join("")}</div></div>
-      <div class="keys" style="margin-top:8px">${KEYS.map(([n, c]) => `<span style="--k:${c}">${n}</span>`).join("")}<span style="--k:var(--warn)">일몰</span></div></section>
-    <div class="sec-h"><h2>${esc(day.city)} · Day ${day.n}</h2><span>${mdShort(day.date)}</span></div>
+  const day = selDay(); setCity(day); const live = isLive(day); const isToday = days().indexOf(day) === curDayIdx() || !!S.sim;
+  const mb = mealBands(day); const dm = memosForDay(day);
+  return `${checksCard(day, live, isToday ? "오늘 챙길 것" : `${mdShort(day.date)} 챙길 것`)}
+    <div class="sec-h"><h2>${esc(day.city)} · Day ${day.n}</h2><span>${mdShort(day.date)} · ${esc(day.theme || "")}</span></div>
     ${mapCard(day)}
-    <section class="card" style="margin:12px 16px 0">${stripHTML(day, isLive(day))}</section>
-    <div style="height:10px"></div>${timeline(day, isLive(day))}
+    ${mb ? `<div class="bands" style="margin-top:12px">${mb}</div>` : ""}
+    <div class="sec-h"><h2>시간표</h2><span>${(day.items || []).length}개${dm.length ? ` · 메모 ${dm.length}` : ""} · 일몰 ${hm(daySunset(day), day.tz)}</span></div>
+    ${timeline(day, live)}
     <div style="display:flex;gap:8px;padding:16px"><button class="btn" data-step="-1" ${S.sel === 0 ? "disabled" : ""}>이전 날</button><span style="flex:1"></span><button class="btn" data-step="1" ${S.sel === days().length - 1 ? "disabled" : ""}>다음 날</button></div>`;
 }
 
@@ -345,19 +408,29 @@ function viewDine() {
   const day = selDay(); setCity(day);
   const slots = days().flatMap(d => (d.dining || []).map(sl => ({ d, sl })));
   const picked = slots.filter(x => x.sl.o.some(o => o.status === "chosen")).length;
-  const f = S.dineFilter;
-  const list = slots.filter(({ d, sl }) => f === "day" ? d === day : f === "open" ? !sl.o.some(o => o.status === "chosen") : f === "must" ? sl.o.some(o => o.r === "must") : true);
-  return `<div class="sec-h"><h2>식당</h2><span>끼니 ${slots.length}개 중 ${picked}개 결정</span></div>
-    <section class="card" style="margin:0 16px"><div class="meter" aria-label="끼니별 결정 현황">${slots.map(x => { const p = x.sl.o.find(o => o.status === "chosen"); return `<i style="${p ? `background:${p.r === "must" ? "var(--crit)" : p.r === "rec" ? "var(--warn)" : "var(--ok)"}` : ""}" title="Day ${x.d.n} ${MEAL[x.sl.meal]}"></i>`; }).join("")}</div>
-      <p class="small muted" style="margin:8px 0 0">칸 하나가 한 끼입니다. 고른 곳의 예약 필요도를 색으로 보여줍니다(빨강 필수, 주황 권장, 초록 불필요). 고른 식당은 두 분 화면과 지도에 함께 표시됩니다.</p></section>
-    ${f === "day" ? `<div class="mapcard" style="height:240px;min-height:0"><div id="map-slot" style="position:absolute;inset:0"></div></div>` : ""}
-    <div style="height:12px"></div>
-    <div class="chips" role="group" aria-label="보기">${[["all", "전체"], ["day", `Day ${day.n} · 지도`], ["open", "아직 안 고른 끼니"], ["must", "예약 필수 후보"]].map(([k, l]) => `<button class="chip" data-dinef="${k}" aria-pressed="${f === k}">${l}</button>`).join("")}</div>
-    <div class="stack" style="margin-top:12px">${list.length ? list.map(({ d, sl }) => `<section class="card slot" style="--city:${CITY_VAR[sl.city]}"><div class="slot-h"><span class="pill p-city">Day ${d.n} · ${mdShort(d.date)}</span><b>${MEAL[sl.meal]}</b><span class="small muted">${esc(sl.city)}</span></div>
+  const f = ["day", "open", "all"].includes(S.dineFilter) ? S.dineFilter : "day";
+  const list = slots.filter(({ d, sl }) => f === "day" ? d === day : f === "open" ? !sl.o.some(o => o.status === "chosen") : true);
+  const ms = mealSlots(day); const planned = sl => ms.find(m => m.sl === sl)?.it;
+  /* 주변 식당 더 찾기: 그날 동선의 장소마다 구글 지도 주변 검색 */
+  const near = dayStops(day).filter(s => s.lat != null && s.cat !== "airport").slice(0, 8);
+  const gNear = (q, s) => `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${s.lat},${s.lng},17z`;
+  const more = `<div class="sec-h"><h2>주변 식당 더 찾아보기</h2><span>구글 지도에서 열림</span></div>
+    <section class="card more" style="margin:0 16px">
+      <button class="btn primary block" data-near-me>${SVG.pin}지금 내 위치 주변 식당</button>
+      ${near.length ? `<p class="small muted" style="margin:12px 0 6px">Day ${day.n} 동선 주변</p><div class="near">${near.map(s => `<div class="nr"><span class="nm">${esc(s.cat === "hotel" ? "숙소" : s.label)}</span><a class="btn sm" href="${esc(gNear("restaurants", s))}" target="_blank" rel="noopener">식당</a><a class="btn sm" href="${esc(gNear("cafe", s))}" target="_blank" rel="noopener">카페</a></div>`).join("")}</div>` : ""}
+    </section>`;
+  const slotCard = ({ d, sl }) => { const pi = d === day ? planned(sl) : null;
+    return `<section class="card slot" style="--city:${CITY_VAR[sl.city]}"><div class="slot-h">${f !== "day" ? `<span class="pill p-city">Day ${d.n} · ${mdShort(d.date)}</span>` : ""}<b>${MEAL[sl.meal]}</b><span class="small muted">${esc(sl.city)}</span></div>
+      ${pi?.pl ? `<p class="small" style="margin:0 0 6px">일정상 장소: <b>${esc(pi.pl)}</b></p>` : ""}
       <p class="small muted" style="margin:0 0 6px">${esc(sl.ctx)}</p>
       ${sl.o.map(o => `<div class="opt ${o.status === "chosen" ? "chosen" : ""}"><div class="hd"><b>${esc(o.n)}</b>${pill(RES[o.r][0], RES[o.r][1])}</div>
         <div class="meta">${esc(o.h)}${o.chk ? " · 영업시간 재확인 필요" : ""}</div><div class="small">${esc(o.no)}</div>
-        <div class="acts"><button class="btn sm ${o.status === "chosen" ? "primary" : ""}" data-pick="${sl.sid}:${o.id}" aria-pressed="${o.status === "chosen"}">${o.status === "chosen" ? "선택됨" : "여기로 정하기"}</button><button class="btn sm" data-dine="${sl.sid}:${o.id}">${SVG.map}지도</button><a class="btn sm" href="${esc(gNavUrl(o))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a></div></div>`).join("")}</section>`).join("") : `<div class="empty">조건에 맞는 끼니가 없습니다.</div>`}</div>`;
+        <div class="acts"><button class="btn sm ${o.status === "chosen" ? "primary" : ""}" data-pick="${sl.sid}:${o.id}" aria-pressed="${o.status === "chosen"}">${o.status === "chosen" ? "선택됨" : "여기로 정하기"}</button><button class="btn sm" data-dine="${sl.sid}:${o.id}">${SVG.map}지도</button><a class="btn sm" href="${esc(gNavUrl(o))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a></div></div>`).join("")}</section>`; };
+  return `<div class="sec-h"><h2>${f === "day" ? `Day ${day.n} 식당` : f === "open" ? "아직 안 고른 끼니" : "전체 식당 후보"}</h2><span>전체 ${slots.length}끼 중 ${picked}끼 결정</span></div>
+    <div class="chips" role="group" aria-label="보기">${[["day", `Day ${day.n} · ${mdShort(day.date)}`], ["open", "아직 안 고른 끼니"], ["all", "전체 일정"]].map(([k, l]) => `<button class="chip" data-dinef="${k}" aria-pressed="${f === k}">${l}</button>`).join("")}</div>
+    ${f === "day" && list.length ? `<div class="mapcard" style="height:240px;min-height:0"><div id="map-slot" style="position:absolute;inset:0"></div></div>` : ""}
+    <div class="stack" style="margin-top:12px">${list.length ? list.map(slotCard).join("") : `<div class="empty">${f === "day" ? `Day ${day.n}에는 미리 골라 둔 식당 후보가 없습니다.<br>아래에서 주변 식당을 찾아보세요.` : "조건에 맞는 끼니가 없습니다."}</div>`}</div>
+    ${more}`;
 }
 
 /* ── 메모 ── */
@@ -454,6 +527,7 @@ function openItem(id) {
   showSheet(`<h3>${esc(it.ti)}</h3><div class="sub">${mdShort(it.day.date)} ${hm(it.s, it.tz)}${it.e ? "–" + hm(it.e, it.etz || it.tz) : ""}${it.pl && it.pl !== it.ti ? " · " + esc(it.pl) : ""}</div>
     ${it.pl || it.lat != null ? `<div class="gmap"><iframe src="${esc(gEmbedPlace(it))}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="구글 지도: ${esc(it.pl || it.ti)}"></iframe></div>
     <div class="acts"><a class="btn primary" href="${esc(gNavUrl(it))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a><a class="btn" href="${esc(gPlaceUrl(it))}" target="_blank" rel="noopener">${SVG.map}구글 지도 앱</a></div>` : ""}
+    ${it.t === "meal" && (it.day.dining || []).some(sl => sl.meal === mealOf(it)) ? `<div class="block"><button class="btn block" data-goto="dine" data-gday="${days().indexOf(it.day)}">다른 식당 후보 보기</button></div>` : ""}
     <div class="block"><div class="seg-ctl st-ctl" role="group" aria-label="일정 상태">${[["planned", "예정"], ["done", "완료"], ["skipped", "건너뜀"]].map(([k, l]) => `<button data-st="${it.id}:${k}" aria-pressed="${(it.st || "planned") === k}">${l}</button>`).join("")}</div></div>
     ${it.no ? `<div class="block"><div class="note">${esc(it.no)}</div></div>` : ""}
     ${guideHTML(S.curGuide)}
@@ -549,12 +623,12 @@ async function saveCheck(dayId, infoId, done) {
   try { await rpc("trip_day_check", { p_day_id: dayId, p_info_id: infoId, p_done: done }); }
   catch (e) { toast("저장하지 못했습니다. 연결을 확인해 주세요"); load(true); }
 }
-async function saveStatus(id, st) {
+async function saveStatus(id, st, reopen = true) {
   const it = allItems().find(x => x.id === id); if (!it || it.st === st) return; const prev = it.st || "planned";
-  const raw = days().flatMap(d => d.items || []).find(x => x.id === id); raw.st = st; ls.set(CACHE_KEY, S.data); render(); openItem(id);
-  toast(st === "done" ? "완료로 표시했습니다" : st === "skipped" ? "건너뜀으로 표시했습니다. 길찾기 동선에서 빠집니다" : "예정으로 되돌렸습니다");
+  const raw = days().flatMap(d => d.items || []).find(x => x.id === id); raw.st = st; ls.set(CACHE_KEY, S.data); render(); if (reopen) openItem(id);
+  toast(st === "done" ? (reopen ? "완료로 표시했습니다" : "방문 완료로 표시했습니다")  : st === "skipped" ? "건너뜀으로 표시했습니다. 길찾기 동선에서 빠집니다" : "예정으로 되돌렸습니다");
   try { await rpc("trip_item_status", { p_id: id, p_status: st }); }
-  catch (e) { raw.st = prev; ls.set(CACHE_KEY, S.data); render(); if (S.sheet?.id === id) openItem(id); toast("저장하지 못했습니다. 연결을 확인해 주세요"); }
+  catch (e) { raw.st = prev; ls.set(CACHE_KEY, S.data); render(); if (reopen && S.sheet?.id === id) openItem(id); toast("저장하지 못했습니다. 연결을 확인해 주세요"); }
 }
 async function saveTodo(id, done) {
   const td = D().todos.find(t => t.id === id); const prev = td.done; td.done = done; render();
@@ -574,15 +648,26 @@ async function removeMemo(id) {
   catch (e) { ms.splice(i, 0, m); render(); toast("삭제하지 못했습니다"); }
 }
 
+/* 내 위치 주변 식당 (위치 권한이 없으면 구글 지도가 현재 위치 기준으로 검색) */
+function openNearMe() {
+  const fallback = () => window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("restaurants near me"), "_blank", "noopener");
+  if (!navigator.geolocation) { fallback(); return; }
+  const w = window.open("about:blank", "_blank"); toast("현재 위치를 확인하는 중입니다");
+  navigator.geolocation.getCurrentPosition(p => { const u = `https://www.google.com/maps/search/restaurants/@${p.coords.latitude.toFixed(6)},${p.coords.longitude.toFixed(6)},17z`; if (w) w.location.href = u; else window.open(u, "_blank", "noopener"); },
+    () => { const u = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("restaurants near me"); if (w) w.location.href = u; else fallback(); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 120000 });
+}
+
 /* ── 이벤트 ── */
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg]");
+  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me]");
   if (!el) return;
   const ds = el.dataset;
-  if (ds.tab) { S.tab = ds.tab; closeSheet(); render(); window.scrollTo(0, 0); return; }
-  if (ds.goto) { S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; render(); window.scrollTo(0, 0); return; }
+  if (ds.tab) { S.tab = ds.tab; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
+  if (ds.goto) { if (ds.gday != null) S.sel = +ds.gday; else if (S.tab === "today" && phase() === "during") S.sel = curDayIdx(); S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; closeSheet(); render(); window.scrollTo(0, 0); return; }
   if (ds.day != null) { S.sel = +ds.day; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
   if (ds.step) { S.sel = Math.min(days().length - 1, Math.max(0, S.sel + +ds.step)); render(); window.scrollTo(0, 0); return; }
+  if (ds.hst) { const [i, st] = ds.hst.split(":"); saveStatus(+i, st, false); return; }
+  if (ds.nearMe != null) { openNearMe(); return; }
   if (ds.st) { const [i, st] = ds.st.split(":"); saveStatus(+i, st); return; }
   if (ds.gimg != null) { openGuideImg(S.curGuide, +ds.gimg); return; }
   if (ds.item) { openItem(+ds.item); return; }
