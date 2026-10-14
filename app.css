@@ -457,3 +457,31 @@ body{line-height:1.6}
 .iform .acts{display:flex;gap:8px;align-items:center}
 .now .dots .d.live:not(.cur){box-shadow:0 0 0 3px color-mix(in srgb,#FFD166 85%,transparent)}
 .now.is-focus .lbl{display:inline-flex;align-items:center;gap:6px;background:color-mix(in srgb,var(--on-city) 16%,transparent);padding:3px 10px;border-radius:999px;opacity:1}
+
+/* ── 2026-10-14 사용성 테스트 반영 ── */
+.now .next{all:unset;box-sizing:border-box;display:flex;align-items:center;gap:12px;border-top:1px solid color-mix(in srgb,var(--on-city) 25%,transparent);padding-top:12px;cursor:pointer;color:var(--on-city)}
+.now .next:focus-visible{outline:2px solid var(--on-city);outline-offset:3px;border-radius:8px}
+.now .next .chev{opacity:.7;display:grid}
+.now .hero-map{margin:0;height:min(30vh,260px);min-height:180px}
+.leg2.go{background:color-mix(in srgb,var(--on-city) 22%,transparent);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--on-city) 55%,transparent)}
+.leg2.late{background:var(--on-city);color:var(--city)}
+.leg2.late .ic{background:var(--crit);color:#fff;font-weight:900}
+.leg2.late .tx span{opacity:1;white-space:normal;font-weight:600}
+.leg2.go .tx span{opacity:1;white-space:normal;font-weight:600}
+.leg2.late .btn{background:var(--city);color:var(--on-city);border-color:var(--city)}
+@media (prefers-color-scheme: dark){ .pin.done{opacity:.85} .pin{box-shadow:0 0 0 2px rgba(255,255,255,.18),0 2px 6px rgba(0,0,0,.4)} }
+.pin.food.lbl{width:auto;min-width:26px;padding:0 5px;border-radius:13px;font-size:10.5px;white-space:nowrap}
+.pin.food.chosen{background:var(--meal);color:#fff;transform:scale(1.15);z-index:2}
+.opt .tag{display:inline-grid;place-items:center;min-width:26px;height:20px;padding:0 5px;margin-right:6px;border-radius:10px;border:2px solid var(--meal);font-size:10.5px;font-weight:800;vertical-align:1px}
+.opt.chosen .tag{background:var(--meal);color:#fff}
+.memo-day{margin:0 16px}
+.memo-day .mrow{display:flex;gap:8px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+.memo-day .mrow:last-of-type{border-bottom:0}
+.memo-day .mrow .tx{flex:1;min-width:0;white-space:pre-wrap}
+.memo-day .mrow .tx small{display:block;color:var(--mute);margin-top:2px;white-space:normal}
+.memo-day form{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.memo-day textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--paper);color:var(--ink);font:inherit;resize:vertical}
+.memo-day select{box-sizing:border-box;max-width:100%;min-width:0;flex:1 1 auto;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--paper);color:var(--ink);font:inherit}
+.pend{font-size:11px;font-weight:700;color:var(--warn)}
+.simbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.lnk{color:var(--city);text-decoration:underline;cursor:pointer}
