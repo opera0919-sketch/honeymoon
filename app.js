@@ -34,6 +34,8 @@ const KEYS = [["이동", "var(--move)"], ["관광", "var(--city)"], ["식사", "
 const BSTAT = { confirmed: ["확정", "p-ok"], to_book: ["예약 필요", "p-crit"], unknown: ["확인 필요", "p-warn"], cancelled: ["취소", "p-mute"] };
 const RES = { must: ["예약 필수", "p-crit"], rec: ["예약 권장", "p-warn"], free: ["예약 불필요", "p-ok"] };
 const MEAL = { breakfast: "아침", lunch: "점심", dinner: "저녁", snack: "간식" };
+const MEAL1 = { breakfast: "아", lunch: "점", dinner: "저", snack: "간" };
+const optTag = (sl, i) => `${MEAL1[sl.meal] || "식"}${i + 1}`;
 const WD = ["일", "월", "화", "수", "목", "금", "토"];
 
 const S = {
@@ -127,6 +129,7 @@ async function rpc(fn, args) { const c = initSb(); if (!c) throw new Error("offl
 async function load(silent) {
   if (S.loading) return; S.loading = true;
   try {
+    if (outbox.length) await flush();
     const d = await rpc("trip_app_export");
     S.data = d; S.source = "live"; S.lastLoad = Date.now(); ls.set(CACHE_KEY, d); syncGKey();
     if (!silent) toast("최신 일정을 불러왔습니다");
@@ -233,7 +236,7 @@ function drawMap() {
   });
   /* 그날 고른 식당 */
   (day.dining || []).forEach(sl => { const o = (sl.o || []).find(o => o.status === "chosen"); if (o && o.lat != null) {
-    const m = L.marker([o.lat, o.lng], { icon: L.divIcon({ className: "", html: `<div class="pin food">${sl.meal === "lunch" ? "점" : "저"}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] }), title: o.n }).addTo(layer);
+    const m = L.marker([o.lat, o.lng], { icon: L.divIcon({ className: "", html: `<div class="pin food">${MEAL1[sl.meal] || "식"}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] }), title: o.n }).addTo(layer);
     m.on("click", () => openDine(sl.sid, o.id)); } });
   const pts = (stops.length ? stops : []).map(s => [s.lat, s.lng]);
   if (pts.length === 1) map.setView(pts[0], 15); else if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [36, 36], maxZoom: 16 });
@@ -242,7 +245,8 @@ function drawMap() {
 function drawDineMap() {
   const day = selDay(); const f = S.dineFilter; const pts = [];
   (day?.dining || []).forEach(sl => (sl.o || []).forEach((o, i) => { if (o.lat == null) return; pts.push([o.lat, o.lng]);
-    const m = L.marker([o.lat, o.lng], { icon: L.divIcon({ className: "", html: `<div class="pin food" style="${o.status === "chosen" ? "background:var(--meal);color:#fff" : ""}">${sl.meal === "lunch" ? "점" : "저"}</div>`, iconSize: [24, 24], iconAnchor: [12, 12] }), title: o.n }).addTo(layer);
+    const m = L.marker([o.lat, o.lng], { icon: L.divIcon({ className: "", html: `<div class="pin food lbl ${o.status === "chosen" ? "chosen" : ""}">${optTag(sl, i)}</div>`, iconSize: [30, 24], iconAnchor: [15, 12] }), title: o.n, zIndexOffset: o.status === "chosen" ? 500 : 0 }).addTo(layer);
+    m.bindTooltip(esc(o.n), { direction: "top", offset: [0, -10] });
     m.on("click", () => openDine(sl.sid, o.id)); }));
   dayStops(day).filter(s => s.cat === "hotel").forEach(s => L.marker([s.lat, s.lng], { icon: L.divIcon({ className: "", html: `<div class="pin hotel">숙</div>`, iconSize: [30, 30], iconAnchor: [15, 15] }) }).addTo(layer));
   if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [30, 30], maxZoom: 16 }); else if (pts.length) map.setView(pts[0], 15); else map.setView(CITY_GEO[day?.city] || CITY_GEO["파리"], 13);
@@ -251,6 +255,9 @@ const getVar = v => { if (!v) return "#888"; const m = v.match(/var\((--[^)]+)\)
 const isLive = day => phase() === "during" && selDay() === day || !!S.sim && selDay() === day;
 
 /* ── 화면 조각 ── */
+/* 출발 전(미리보기 아님)에는 서울 시각이 주인공, 여행 중에는 현지 시각 */
+const homeClock = () => phase() === "before" && !S.sim;
+const clockHTML = (t, d) => homeClock() ? `<b>${hm(t, "Asia/Seoul")}</b><span>서울 · ${esc(d?.city || "현지")} ${hm(t, d?.tz)}</span>` : `<b>${hm(t, d?.tz)}</b><span>${esc(d?.city || "현지")}${S.sim ? " 미리보기" : ""} · 서울 ${hm(t, "Asia/Seoul")}</span>`;
 function header() {
   const ds = days(); const ci = curDayIdx(); const d = selDay(); const t = now(); const ph = phase();
   let title = "신혼여행 13일", sub = "";
@@ -259,7 +266,7 @@ function header() {
   if (S.tab !== "today" || ph === "during" || S.sim) { title = `${d.city} · Day ${d.n}`; sub = `${md(d.date)} · ${d.theme}`; }
   return `<header class="top"><div class="top-in">
       <div class="place-title"><h1>${esc(title)}</h1><p>${esc(sub)}</p></div>
-      <div class="clock"><b>${hm(t, d?.tz)}</b><span>${esc(d?.city || "현지")}${S.sim ? " 미리보기" : ""} · 서울 ${hm(t, "Asia/Seoul")}</span></div>
+      <div class="clock">${clockHTML(t, d)}</div>
     </div>
     <div class="days" role="tablist" aria-label="여행 날짜">${ds.map((x, i) => { const dt = new Date(x.date + "T12:00:00Z");
       return `<button class="day ${i === ci ? "today" : ""} ${i < ci ? "past" : ""}" style="--c:${CITY_VAR[x.city]}" data-day="${i}" role="tab" aria-current="${i === S.sel}" aria-label="Day ${x.n} ${mdShort(x.date)} ${x.city}"><small>${WD[dt.getUTCDay()]}</small><b>${dt.getUTCDate()}</b><i></i></button>`; }).join("")}</div></header>`;
@@ -302,7 +309,7 @@ function timeline(day, live) {
     const endTz = it.etz || it.tz; const endTxt = it.e != null ? hm(it.e, endTz) + (ymd(it.e, endTz) !== ymd(it.s, it.tz) ? "+1" : "") : "";
     const num = numOf[it.id];
     out += `<div class="stop ${num ? "" : "dot"} ${isNow && !isSkip ? "is-now" : ""} ${isPast ? "past" : ""} ${isSkip ? "skip" : ""}" style="--k:${k}">
-      <div class="tm"><b>${hm(it.s, it.tz)}</b><small>${endTxt}${it.etz && it.etz !== it.tz ? " 현지" : ""}</small></div>
+      <div class="tm"><b>${hm(it.s, it.tz)}</b><small>${endTxt}${it.etz && it.etz !== it.tz ? (it.etz === "Asia/Seoul" ? " 서울" : " 도착지") : ""}</small></div>
       <div class="rail"><span class="num">${num ?? ""}</span></div>
       <div class="body"><button class="row-btn" data-item="${it.id}"><span class="tx"><b>${esc(it.ti)}</b>${it.pl && it.pl !== it.ti ? `<span>${esc(it.pl)}${it.pll ? " · " + esc(it.pll) : ""}</span>` : (it.pll ? `<span>${esc(it.pll)}</span>` : "")}<span class="tags">${tags}</span></span><span class="chev">${SVG.chev}</span></button></div></div>`;
     prevEnd = it.e ?? it.s;
@@ -328,29 +335,39 @@ function dayDots(day, t, fi) {
 /* 메인 카드 안 시간대 진행바 (일정 시작~끝, 일몰 표시) */
 function heroBar(day, t, live) {
   const its = (day.items || []).filter(it => it.s != null && it.tz !== "Asia/Seoul"); if (!its.length) return "";
-  const a = Math.min(...its.map(i => i.s)), b = Math.max(...its.map(i => i.e ?? i.s)); if (b <= a) return "";
+  /* 다른 시간대에 도착하는 항목(귀국편 등)은 도착이 아니라 출발까지만 그날 범위로 본다 */
+  const endL = i => i.etz && i.etz !== i.tz ? i.s : (i.e ?? i.s);
+  const a = Math.min(...its.map(i => i.s)), b = Math.max(...its.map(endL)); if (b <= a) return "";
   const pos = e => Math.min(100, Math.max(0, (e - a) / (b - a) * 100)); const ss = daySunset(day);
   const segs = its.map(it => { const x = pos(it.s), w = Math.max(.8, pos(it.e ?? it.s + 1800) - x); const on = it.st === "done" || live && (it.e ?? it.s) <= t; const cur = live && it.s <= t && t < (it.e ?? it.s);
     return `<i class="${cur ? "cur" : on ? "on" : ""} ${it.st === "skipped" ? "skip" : ""}" style="left:${x}%;width:${w}%"></i>`; }).join("");
   const nowL = live && t >= a && t <= b ? `<span class="nowl" style="left:${pos(t)}%"></span>` : "";
   const ssM = ss > a && ss < b ? `<span class="ssm" style="left:${pos(ss)}%" title="일몰"></span>` : "";
-  return `<div class="hbar" aria-hidden="true"><div class="trk">${segs}${ssM}${nowL}</div><div class="hx"><span>${hm(a, its[0].tz)} 시작</span>${ss > a && ss < b ? `<span class="ss"><i></i>일몰 ${hm(ss, day.tz)}</span>` : ""}<span>끝 ${hm(b, its[its.length - 1].etz || its[its.length - 1].tz)}</span></div></div>`;
+  return `<div class="hbar" aria-hidden="true"><div class="trk">${segs}${ssM}${nowL}</div><div class="hx"><span>${hm(a, its[0].tz)} 시작</span>${ss > a && ss < b ? `<span class="ss"><i></i>일몰 ${hm(ss, day.tz)}</span>` : ""}<span>끝 ${hm(b, day.tz)}</span></div></div>`;
 }
 /* 두 지점 사이 이동 추천 (직선거리 기반) */
 function kmBetween(a, b) { const R = 6371, r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLng = (b.lng - a.lng) * r; const x = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLng / 2) ** 2; return 2 * R * Math.asin(Math.sqrt(x)); }
 const hasLL = x => x && x.lat != null && x.lng != null;
-function legHTML(day, from, to) {
+function legHTML(day, from, to, t, live) {
   if (!to) return "";
   const MOVE = ["flight", "train", "transfer"];
-  if (MOVE.includes(to.t)) return `<div class="leg2"><span class="ic">${SVG.route}</span><span class="tx"><b>${esc(to.ti)}</b><span>${hm(to.s, to.tz)} 출발${to.e ? ` · ${dur(to.e - to.s)} 소요` : ""}</span></span>${hasLL(to) ? `<a class="btn sm" href="${esc(gNavUrl(to, to.t === "transfer" ? "driving" : "transit"))}" target="_blank" rel="noopener">${SVG.nav}경로</a>` : ""}</div>`;
-  if (!hasLL(to)) return to.pl ? `<div class="leg2"><span class="ic">${SVG.nav}</span><span class="tx"><b>${esc(to.pl)}</b><span>좌표가 없어 이동 시간을 계산하지 못했습니다</span></span><a class="btn sm" href="${esc(gNavUrl(to))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a></div>` : "";
+  /* 늦음 표시: 지금(라이브)이 권장 출발 시각을 넘겼으면 경고 */
+  const lateTxt = (leave, travel = 0) => { if (!live || leave == null || t <= leave) return "";
+    if (t >= to.s) return `시작 ${hm(to.s, to.tz)}에서 ${dur(t - to.s)} 지났어요 · 서둘러 주세요`;
+    const over = t + travel - to.s; return over > 60 ? `이대로면 약 ${dur(over)} 늦어요 · 지금 바로 출발하세요` : `지금 출발할 시간이에요 · 권장 ${hm(leave, to.tz)}`; };
+  const lvl = (leave, travel = 0) => !live || leave == null || t <= leave ? 0 : t + travel - to.s > 60 ? 2 : 1;
+  const box = (late, ic, tx, a, lv = late ? 2 : 0) => `<div class="leg2 ${lv === 2 ? "late" : lv === 1 ? "go" : ""}"><span class="ic">${lv === 2 ? "!" : ic}</span><span class="tx">${tx}</span>${a}</div>`;
+  if (MOVE.includes(to.t)) { const lt = to.t === "transfer" ? lateTxt(to.s) : (live && t > to.s ? `출발 ${hm(to.s, to.tz)}이 지났어요` : "");
+    return box(lt, SVG.route, `<b>${esc(to.ti)}</b><span>${lt || `${hm(to.s, to.tz)} 출발${to.e ? ` · ${dur(to.e - to.s)} 소요` : ""}`}</span>`, hasLL(to) ? `<a class="btn sm" href="${esc(gNavUrl(to, to.t === "transfer" ? "driving" : "transit"))}" target="_blank" rel="noopener">${SVG.nav}경로</a>` : ""); }
+  if (!hasLL(to)) return to.pl ? box(lateTxt(to.s), SVG.nav, `<b>${esc(to.pl)}</b><span>${lateTxt(to.s) || "좌표가 없어 이동 시간을 계산하지 못했습니다"}</span>`, `<a class="btn sm" href="${esc(gNavUrl(to))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a>`) : "";
   const o = hasLL(from) ? from : null;
   const p = new URLSearchParams({ api: "1", destination: `${to.lat},${to.lng}` }); if (o) p.set("origin", `${o.lat},${o.lng}`);
-  if (!o) { p.set("travelmode", "walking"); return `<div class="leg2"><span class="ic">${SVG.nav}</span><span class="tx"><b>${esc(to.pl || to.ti)}까지</b><span>현재 위치에서 경로를 확인하세요</span></span><a class="btn sm" href="https://www.google.com/maps/dir/?${p.toString().replace(/%2C/g, ",")}" target="_blank" rel="noopener">${SVG.nav}경로</a></div>`; }
+  if (!o) { p.set("travelmode", "walking"); const lt = lateTxt(to.s); return box(lt, SVG.nav, `<b>${esc(to.pl || to.ti)}까지</b><span>${lt || "현재 위치에서 경로를 확인하세요"}</span>`, `<a class="btn sm" href="https://www.google.com/maps/dir/?${p.toString().replace(/%2C/g, ",")}" target="_blank" rel="noopener">${SVG.nav}경로</a>`); }
   const km = kmBetween(o, to); if (km < .08) return "";
-  const walk = km <= 1.6, mins = Math.round(km * 1.3 * 1000 / 75); p.set("travelmode", walk ? "walking" : "transit");
-  const leave = walk ? to.s - (mins + 5) * 60 : null;
-  return `<div class="leg2"><span class="ic">${walk ? "🚶" : "🚇"}</span><span class="tx"><b>${walk ? `도보 약 ${mins}분` : "대중교통·택시 추천"} <small>· 직선 ${km < 1 ? Math.round(km * 1000) + "m" : km.toFixed(1) + "km"}</small></b><span>${leave ? `${hm(leave, to.tz)}쯤 출발 · ` : ""}${esc(o.pl || o.ti)} → ${esc(to.pl || to.ti)}</span></span><a class="btn sm" href="https://www.google.com/maps/dir/?${p.toString().replace(/%2C/g, ",")}" target="_blank" rel="noopener">${SVG.route}경로</a></div>`;
+  const walk = km <= 1.6, mins = walk ? Math.round(km * 1.3 * 1000 / 75) : Math.round(km * 1.3 / 18 * 60) + 10; p.set("travelmode", walk ? "walking" : "transit");
+  const leave = to.s - (mins + 5) * 60; const lt = lateTxt(leave, mins * 60);
+  return box(lt, walk ? "🚶" : "🚇", `<b>${walk ? `도보 약 ${mins}분` : `대중교통·택시 약 ${mins}분`} <small>· 직선 ${km < 1 ? Math.round(km * 1000) + "m" : km.toFixed(1) + "km"}</small></b><span>${lt || `${hm(leave, to.tz)}쯤 출발 · ${esc(o.pl || o.ti)} → ${esc(to.pl || to.ti)}`}</span>`,
+    `<a class="btn sm" href="https://www.google.com/maps/dir/?${p.toString().replace(/%2C/g, ",")}" target="_blank" rel="noopener">${SVG.route}경로</a>`, lvl(leave, mins * 60));
 }
 /* 끼니 슬롯 ↔ 일정의 식사 항목 */
 const mealOf = it => { const h = +hm(it.s, it.tz).slice(0, 2); return h < 11 ? "breakfast" : h < 16 ? "lunch" : "dinner"; };
@@ -359,8 +376,10 @@ function mealSlots(day) {
   return (day.dining || []).map(sl => { const ch = (sl.o || []).find(o => o.status === "chosen"); const it = items.find(i => i.t === "meal" && mealOf(i) === sl.meal);
     return { sl, ch, it, decided: !!(ch || it?.pl) }; });
 }
+const MEAL_END = { breakfast: 10.5, lunch: 15, snack: 17, dinner: 21.5 };
+function mealPassed(day, meal) { if (!isLive(day)) return false; const t = now(); return t >= midnight(day.date, day.tz) + (MEAL_END[meal] ?? 24) * 3600; }
 function mealBands(day) {
-  const open = mealSlots(day).filter(m => !m.decided); if (!open.length) return "";
+  const open = mealSlots(day).filter(m => !m.decided && !mealPassed(day, m.sl.meal)); if (!open.length) return "";
   /* 고를 때까지 계속 표시(상태 기반이라 식당 탭에 갔다가 그냥 나와도 남음) */
   return `<button class="band warn" data-goto="dine"><span class="bd-dot"></span><span class="tx"><b>식사 장소를 골라볼까요?</b><span>${open.map(m => MEAL[m.sl.meal]).join("·")} 미정 · 후보 ${open.reduce((n, m) => n + m.sl.o.length, 0)}곳</span></span><span class="go">고르기${SVG.chev}</span></button>`;
 }
@@ -368,7 +387,8 @@ function mealBands(day) {
 function dayChecks(day, live) {
   const t = now(); const dayInfo = (D().info || []).filter(x => x.from && x.from <= day.date && (x.to || x.from) >= day.date);
   const ref = live ? t : Math.max(t, midnight(day.date, day.tz));
-  const todoDue = (D().todos || []).filter(td => td.due && td.due <= ref + 3 * 86400 && (!td.done || td.due >= ref - 86400));
+  /* 마감이 하루 이상 지난 할 일은 '오늘 챙길 것'에서 빼고 할 일 탭에만 남긴다 (매일 같은 빨간 띠가 반복되지 않게) */
+  const todoDue = (D().todos || []).filter(td => td.due && td.due <= ref + 3 * 86400 && td.due >= ref - 86400);
   const checked = id => (D().checks || []).some(c => c.day === day.id && c.info === id);
   return { dayInfo, todoDue, checked, open: dayInfo.filter(x => !checked(x.id)).length + todoDue.filter(td => !td.done).length };
 }
@@ -379,12 +399,16 @@ function checksCard(day, live, title) {
 /* 오늘 탭: 단계별 핵심만 */
 function stageList(day, live) {
   const t = now(); const ms = mealSlots(day); const chosenFor = it => ms.find(m => m.it === it)?.ch;
+  const VTIME = { breakfast: 8.5, lunch: 12.5, snack: 16, dinner: 19.5 }; const base = midnight(day.date, day.tz);
   const rows = (day.items || []).map(it => { const isNow = live && it.s <= t && t < (it.e ?? it.s); const past = it.st === "done" || live && (it.e ?? it.s) <= t; const skip = it.st === "skipped"; const ch = it.t === "meal" ? chosenFor(it) : null;
     const place = ch ? ch.n : (it.pl && it.pl !== it.ti ? it.pl : "");
     return `<button class="stg ${isNow ? "is-now" : ""} ${past ? "past" : ""} ${skip ? "skip" : ""}" style="--k:${TYPE[it.t]?.[1] || "var(--free)"}" ${ch ? `data-dine="${ms.find(m => m.ch === ch).sl.sid}:${ch.id}"` : `data-item="${it.id}"`}>
-      <span class="tm">${hm(it.s, it.tz)}</span><span class="mk">${it.st === "done" ? "✓" : ""}</span><span class="tx"><b>${esc(it.ti)}</b>${place ? `<span>${esc(place)}</span>` : ""}</span>${isNow ? `<span class="pill p-city">지금</span>` : ""}</button>`; }).join("");
-  const vir = ms.filter(m => !m.it).map(m => m.ch ? `<button class="stg" style="--k:var(--meal)" data-dine="${m.sl.sid}:${m.ch.id}"><span class="tm">${MEAL[m.sl.meal]}</span><span class="mk"></span><span class="tx"><b>${esc(m.ch.n)}</b><span>고른 식당</span></span></button>` : "").join("");
-  return rows || vir ? `<section class="card stages" style="margin:0 16px">${rows}${vir}</section>` : `<div class="empty">이 날은 등록된 일정이 없습니다.</div>`;
+      <span class="tm">${hm(it.s, it.tz)}</span><span class="mk">${it.st === "done" ? "✓" : ""}</span><span class="tx"><b>${esc(it.ti)}</b>${place ? `<span>${esc(place)}</span>` : ""}</span>${isNow ? `<span class="pill p-city">지금</span>` : ""}</button>`; });
+  /* 일정에 없는 끼니(고른 식당)는 기본 시각 자리에 끼워 넣는다 */
+  const all = (day.items || []).map((it, i) => ({ s: it.s, h: rows[i] }));
+  ms.filter(m => !m.it && m.ch).forEach(m => all.push({ s: base + (VTIME[m.sl.meal] ?? 12) * 3600 + 1, h: `<button class="stg" style="--k:var(--meal)" data-dine="${m.sl.sid}:${m.ch.id}"><span class="tm">${MEAL[m.sl.meal]}</span><span class="mk"></span><span class="tx"><b>${esc(m.ch.n)}</b><span>고른 식당</span></span></button>` }));
+  all.sort((a, b) => a.s - b.s); const html = all.map(x => x.h).join("");
+  return html ? `<section class="card stages" style="margin:0 16px">${html}</section>` : `<div class="empty">이 날은 등록된 일정이 없습니다.</div>`;
 }
 /* ── 오늘 ── */
 function viewToday() {
@@ -405,20 +429,20 @@ function viewToday() {
     const before = nxt ? [...(day.items || [])].reverse().find(x => x.s < nxt.s && hasLL(x)) : null;
     const from = cur && hasLL(cur) ? cur : before;
     const lbl = fs ? `${S.focus + 1}번 단계 · ${fEnd <= t ? "지난 일정" : "예정"}` : cur ? (isDone ? "방문 완료 · 다음 장소로" : "지금") : "다음 일정까지 여유 시간";
-    hero = `<section class="now ${isDone ? "is-done" : ""} ${fs ? "is-focus" : ""}"><div class="lbl-row"><span class="lbl">${lbl}</span>${fs ? `<button class="mini" data-hfocus="-1">지금으로 돌아가기</button>` : S.sim ? `<button class="mini" data-sim-off>미리보기 끝내기</button>` : ""}</div>
+    hero = `<section class="now ${isDone ? "is-done" : ""} ${fs ? "is-focus" : ""}"><div class="lbl-row"><span class="lbl">${lbl}</span>${fs ? `<button class="mini" data-hfocus="-1">지금으로 돌아가기</button>` : S.sim ? `<span class="simbar"><button class="mini" data-sim-step="-3600" aria-label="1시간 전">−1시간</button><button class="mini" data-sim-step="3600" aria-label="1시간 뒤">+1시간</button><button class="mini" data-sim-off>끝내기</button></span>` : ""}</div>
       ${cur ? `<button class="h2btn" data-item="${cur.id}"><h2>${esc(cur.ti)}</h2><span class="sub">${hm(cur.s, cur.tz)}–${hm(cur.e, cur.etz || cur.tz)}${cur.pl && cur.pl !== cur.ti ? " · " + esc(cur.pl) : ""}</span></button>` : `<h2>${nxt ? esc(nxt.ti) + " 준비" : "오늘 일정을 마쳤습니다"}</h2>`}
       ${tgt ? `<div class="acts">${isDone ? `<span class="done-chip">✓ 방문 완료</span><button class="btn sm" data-hst="${tgt.id}:planned">되돌리기</button>` : `<button class="btn sm solid" data-hst="${tgt.id}:done">✓ 방문 완료</button>`}</div>` : ""}
       ${heroBar(day, t, live)}
       ${dayDots(day, t, fs ? S.focus : null)}
-      ${nxt ? `<div class="next"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}${nxt.t === "meal" && nxt.pl ? " · " + esc(nxt.pl) : ""}</b></div><div class="count">${fs ? (nxt.s - fEnd >= 60 ? `여유 ${dur(nxt.s - fEnd)}` : "") : `${dur(nxt.s - t)} 뒤`}</div></div>` : ""}
-      <div class="mapcard hero-map"><div id="map-slot" style="position:absolute;inset:0"></div></div>
-      ${nxt ? legHTML(day, from, nxt) : ""}</section>`;
+      ${nxt ? `<button class="next" data-item="${nxt.id}" aria-label="다음 일정 ${esc(nxt.ti)} 자세히"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}${nxt.t === "meal" && nxt.pl ? " · " + esc(nxt.pl) : ""}</b></div><div class="count">${fs ? (nxt.s - fEnd >= 60 ? `여유 ${dur(nxt.s - fEnd)}` : "") : `${dur(nxt.s - t)} 뒤`}</div><span class="chev">${SVG.chev}</span></button>` : ""}
+      ${nxt ? legHTML(day, from, nxt, t, live && !fs) : ""}
+      <div class="mapcard hero-map"><div id="map-slot" style="position:absolute;inset:0"></div></div></section>`;
   }
   const dl = items.find(it => ["flight", "train", "checkout"].includes(it.t) && it.s > t);
   let dlh = "";
   if (dl) { const left = dl.s - t, frac = Math.max(0, Math.min(1, left / (6 * 3600))), C = 2 * Math.PI * 24;
-    dlh = `<section class="card deadline"><svg class="ring" viewBox="0 0 58 58" aria-hidden="true"><circle class="bgc" cx="29" cy="29" r="24"/><circle class="fg" cx="29" cy="29" r="24" stroke-dasharray="${C}" stroke-dashoffset="${C * frac}"/><text x="29" y="33" text-anchor="middle">${left < 86400 ? hm(dl.s, dl.tz) : "D-" + Math.ceil(left / 86400)}</text></svg>
-      <div style="flex:1;min-width:0"><div class="small muted">다음 이동 · ${mdShort(dl.day.date)}</div><b>${esc(dl.ti)}</b><div class="small">${dur(left)} 남음${dl.t === "flight" ? " · 국제선 3시간, 유럽 내선 2시간 전 도착 권장" : ""}</div></div></section>`; }
+    dlh = `<section class="card deadline"><svg class="ring" viewBox="0 0 58 58" aria-hidden="true"><circle class="bgc" cx="29" cy="29" r="24"/><circle class="fg" cx="29" cy="29" r="24" stroke-dasharray="${C}" stroke-dashoffset="${C * frac}"/><text x="29" y="33" text-anchor="middle">${left < 86400 ? hm(dl.s, dl.tz) : "D-" + Math.round((Date.parse(ymd(dl.s, dl.tz)) - Date.parse(ymd(t, dl.tz))) / 86400000)}</text></svg>
+      <div style="flex:1;min-width:0"><div class="small muted">다음 이동 · ${mdShort(dl.day.date)}</div><b>${esc(dl.ti)}</b><div class="small">${left >= 86400 ? `${mdShort(ymd(dl.s, dl.tz))} ${hm(dl.s, dl.tz)} · ` : ""}${dur(left)} 남음${dl.t === "flight" ? " · 국제선 3시간, 유럽 내선 2시간 전 도착 권장" : ""}</div></div></section>`; }
   const chk = dayChecks(day, live);
   const bands = (chk.open ? `<button class="band crit" data-goto="plan"><span class="bd-dot"></span><span class="tx"><b>${ph === "before" && !S.sim ? "출발 전 챙겨야 할 것이" : "오늘 챙겨야 할 것이"} ${chk.open}개 있어요</b><span>일정 탭 맨 위에서 확인하고 체크해 주세요</span></span><span class="go">확인${SVG.chev}</span></button>` : "") + mealBands(day);
   return `${hero}
@@ -426,6 +450,34 @@ function viewToday() {
     ${dlh}
     <div class="sec-h"><h2>${ph === "before" && !S.sim ? "첫날 일정" : "오늘 일정"}</h2><button class="btn ghost sm" data-goto="plan">지도·전체 보기${SVG.chev}</button></div>
     ${stageList(day, live)}`;
+}
+
+/* ── 메모: 날짜별 모아보기 + 날짜 전체 메모 쓰기 ── */
+const pendTag = m => m.id < 0 ? ` <span class="pend">올리기 대기</span>` : "";
+function memoRow(m, showDay) {
+  const it = m.item_id ? allItems().find(x => x.id === m.item_id) : null; const d = days().find(x => x.id === m.day_id);
+  const where = [showDay && d ? `Day ${d.n} ${mdShort(d.date)}` : "", it ? it.ti : "날짜 전체"].filter(Boolean).join(" · ");
+  return `<div class="mrow"><div class="tx">${m.pinned ? "📌 " : ""}${esc(m.body)}<small>${it ? `<span role="button" tabindex="0" class="lnk" data-item="${it.id}">${esc(where)}</span>` : esc(where)} · ${esc(who(m.author))}${pendTag(m)}</small></div>
+    <button class="btn sm ghost" data-memo-edit="${m.id}">수정</button><button class="btn sm ghost" data-memo-del="${m.id}" style="color:var(--crit)">삭제</button></div>`;
+}
+function memoForm(day) {
+  const em = S.editingMemo != null ? (D().memos || []).find(x => x.id === S.editingMemo) : null; const di = days().indexOf(day);
+  const items = day.items || [];
+  return `<form id="memo-form" data-id="${em ? em.id : ""}"><input type="hidden" id="memo-day" value="${di}">
+    <label class="sr" for="memo-body">메모 내용</label><textarea id="memo-body" rows="2" maxlength="4000" placeholder="이 날 전체에 남길 메모 (예: 환전, 우산 챙기기)">${esc(em?.body || "")}</textarea>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><select id="memo-item" aria-label="연결할 일정"><option value="">날짜 전체</option>${items.map(it => `<option value="${it.id}" ${em?.item_id === it.id ? "selected" : ""}>${hm(it.s, it.tz)} ${esc(it.ti)}</option>`).join("")}</select>
+      <label class="small" style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="memo-pin" ${em?.pinned ? "checked" : ""}>고정</label><span style="flex:1"></span>
+      ${em ? `<button type="button" class="btn sm" data-memo-cancel>취소</button>` : ""}<button class="btn sm primary" type="submit">${em ? "수정" : "추가"}</button></div></form>`;
+}
+function memoDayCard(day) {
+  const ms = memosForDay(day);
+  return `<div class="sec-h"><h2>이 날 메모</h2><span>${ms.length ? ms.length + "개" : ""}</span></div>
+    <section class="card memo-day">${ms.map(m => memoRow(m, false)).join("")}${memoForm(day)}</section>`;
+}
+function infoMemo() {
+  const ms = D().memos || []; if (!ms.length) return `<div class="sec-h"><h2>모든 메모</h2></div><div class="empty">아직 메모가 없습니다.<br>일정 탭의 ‘이 날 메모’나 각 일정에서 남길 수 있어요.</div>`;
+  return `<div class="sec-h"><h2>모든 메모</h2><span>${ms.length}개</span></div>` + days().filter(d => memosForDay(d).length).map(d => `<div class="sec-h" style="padding-top:6px"><h2 style="font-size:15px">Day ${d.n} · ${mdShort(d.date)}</h2><button class="btn ghost sm" data-day="${days().indexOf(d)}" data-goto="plan">그날 보기${SVG.chev}</button></div>
+    <section class="card memo-day">${memosForDay(d).map(m => memoRow(m, false)).join("")}</section>`).join("");
 }
 
 /* ── 일정 전체 ── */
@@ -438,6 +490,7 @@ function viewPlan() {
     ${mb ? `<div class="bands" style="margin-top:12px">${mb}</div>` : ""}
     <div class="sec-h"><h2>시간표</h2><span>${(day.items || []).length}개${dm.length ? ` · 메모 ${dm.length}` : ""} · 일몰 ${hm(daySunset(day), day.tz)}</span></div>
     ${timeline(day, live)}
+    ${memoDayCard(day)}
     <div style="display:flex;gap:8px;padding:16px"><button class="btn" data-step="-1" ${S.sel === 0 ? "disabled" : ""}>이전 날</button><span style="flex:1"></span><button class="btn" data-step="1" ${S.sel === days().length - 1 ? "disabled" : ""}>다음 날</button></div>`;
 }
 
@@ -445,7 +498,8 @@ function viewPlan() {
 function viewDine() {
   const day = selDay(); setCity(day);
   const slots = days().flatMap(d => (d.dining || []).map(sl => ({ d, sl })));
-  const picked = slots.filter(x => x.sl.o.some(o => o.status === "chosen")).length;
+  /* 결정 = 후보에서 골랐거나, 일정에 이미 식당이 정해져 있는 끼니 */
+  const picked = slots.filter(x => mealSlots(x.d).find(m => m.sl === x.sl)?.decided).length;
   const f = ["day", "open", "all"].includes(S.dineFilter) ? S.dineFilter : "day";
   const list = slots.filter(({ d, sl }) => f === "day" ? d === day : f === "open" ? !sl.o.some(o => o.status === "chosen") : true);
   const ms = mealSlots(day); const planned = sl => ms.find(m => m.sl === sl)?.it;
@@ -461,7 +515,7 @@ function viewDine() {
     return `<section class="card slot" style="--city:${CITY_VAR[sl.city]}"><div class="slot-h">${f !== "day" ? `<span class="pill p-city">Day ${d.n} · ${mdShort(d.date)}</span>` : ""}<b>${MEAL[sl.meal]}</b><span class="small muted">${esc(sl.city)}</span></div>
       ${pi?.pl ? `<p class="small" style="margin:0 0 6px">일정상 장소: <b>${esc(pi.pl)}</b></p>` : ""}
       <p class="small muted" style="margin:0 0 6px">${esc(sl.ctx)}</p>
-      ${sl.o.map(o => `<div class="opt ${o.status === "chosen" ? "chosen" : ""}"><div class="hd"><b>${esc(o.n)}</b>${pill(RES[o.r][0], RES[o.r][1])}</div>
+      ${sl.o.map((o, oi) => `<div class="opt ${o.status === "chosen" ? "chosen" : ""}"><div class="hd"><b>${f === "day" ? `<span class="tag">${optTag(sl, oi)}</span>` : ""}${esc(o.n)}</b>${pill(RES[o.r][0], RES[o.r][1])}</div>
         <div class="meta">${esc(o.h)}${o.chk ? " · 영업시간 재확인 필요" : ""}</div><div class="small">${esc(o.no)}</div>
         <div class="acts"><button class="btn sm ${o.status === "chosen" ? "primary" : ""}" data-pick="${sl.sid}:${o.id}" aria-pressed="${o.status === "chosen"}">${o.status === "chosen" ? "선택됨" : "여기로 정하기"}</button><button class="btn sm" data-dine="${sl.sid}:${o.id}">${SVG.map}지도</button><a class="btn sm" href="${esc(gNavUrl(o))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a></div></div>`).join("")}</section>`; };
   return `<div class="sec-h"><h2>${f === "day" ? `Day ${day.n} 식당` : f === "open" ? "아직 안 고른 끼니" : "전체 식당 후보"}</h2><span>전체 ${slots.length}끼 중 ${picked}끼 결정</span></div>
@@ -533,8 +587,8 @@ async function delItem(id) {
 /* ── 정보: 예약·할 일·가이드 ── */
 function viewInfo() {
   setCity(selDay());
-  const seg = `<div class="seg-ctl" role="group">${[["book", "예약"], ["todo", "할 일"], ["guide", "현지 가이드"], ["map", "지도 설정"]].map(([k, l]) => `<button data-info="${k}" aria-pressed="${S.infoTab === k}">${l}</button>`).join("")}</div>`;
-  return seg + (S.infoTab === "todo" ? infoTodo() : S.infoTab === "guide" ? infoGuide() : S.infoTab === "map" ? infoMap() : infoBook());
+  const seg = `<div class="seg-ctl" role="group">${[["book", "예약"], ["todo", "할 일"], ["memo", "메모"], ["guide", "현지 가이드"], ["map", "지도 설정"]].map(([k, l]) => `<button data-info="${k}" aria-pressed="${S.infoTab === k}">${l}</button>`).join("")}</div>`;
+  return seg + (S.infoTab === "todo" ? infoTodo() : S.infoTab === "memo" ? infoMemo() : S.infoTab === "guide" ? infoGuide() : S.infoTab === "map" ? infoMap() : infoBook());
 }
 function kv(b) {
   const r = [];
@@ -615,7 +669,7 @@ function openItem(id) {
     ${guideHTML(S.curGuide)}
     ${bks.length ? `<div class="block"><h4>예약</h4>${bks.map(b => `<div class="card" style="box-shadow:none;background:var(--sunk);padding:12px"><div style="display:flex;gap:8px"><b style="flex:1">${esc(b.title)}</b>${pill(BSTAT[b.status][0], BSTAT[b.status][1])}</div>${kv(b)}</div>`).join("")}</div>` : ""}
     ${tg.length ? `<div class="block"><h4>알아둘 것</h4>${tg.map(x => x.k === "pick" ? `<div class="small">사람이 많은 곳입니다. 가방은 앞으로 메고 휴대폰은 안쪽 주머니에 두세요.</div>` : x.k === "rain" ? `<div class="small"><b>비가 오면</b> ${esc(x.alt)}</div>` : `<div class="small"><b>${esc(x.x.title)}</b> <span class="muted">${esc(x.x.body)}</span></div>`).join("")}</div>` : ""}
-    <div class="block"><h4>메모 ${ms.length ? ms.length + "개" : ""}</h4>${ms.map(m => `<div class="note" style="display:flex;gap:8px;align-items:flex-start"><span style="flex:1;white-space:pre-wrap">${esc(m.body)}<br><span class="small muted">${esc(who(m.author))}</span></span><button class="btn sm ghost" data-memo-edit="${m.id}">수정</button><button class="btn sm ghost" data-memo-del="${m.id}" style="color:var(--crit)">삭제</button></div>`).join("")}
+    <div class="block"><h4>메모 ${ms.length ? ms.length + "개" : ""}</h4>${ms.map(m => `<div class="note" style="display:flex;gap:8px;align-items:flex-start"><span style="flex:1;white-space:pre-wrap">${esc(m.body)}<br><span class="small muted">${esc(who(m.author))}</span>${pendTag(m)}</span><button class="btn sm ghost" data-memo-edit="${m.id}">수정</button><button class="btn sm ghost" data-memo-del="${m.id}" style="color:var(--crit)">삭제</button></div>`).join("")}
       <form id="quick-memo" data-qitem="${it.id}" data-dayid="${it.day.id}" style="display:flex;gap:8px"><label class="sr" for="qm">이 일정에 메모</label><input id="qm" class="field" style="flex:1;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--paper)" placeholder="이 일정에 메모 남기기" maxlength="4000"><button class="btn primary" type="submit">추가</button></form></div>`);
 }
 const guideFor = it => (D().guides || {})[it.pid != null ? "p" + it.pid : ""] || (D().guides || {})["i" + it.id];
@@ -672,7 +726,7 @@ function render() {
   const body = ({ today: viewToday, plan: viewPlan, dine: viewDine, edit: viewEdit, info: viewInfo }[S.tab] || viewToday)();
   const synced = S.data.synced_at ? new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" }).format(new Date(S.data.synced_at * 1000)) : "";
   const sy = window.scrollY;
-  app.innerHTML = header() + `<main>${S.source === "cache" ? `<div class="offline">오프라인 저장본을 보여드리고 있습니다. 연결되면 자동으로 새로 불러옵니다.</div>` : ""}${body}
+  app.innerHTML = header() + `<main>${S.source === "cache" || outbox.length ? `<div class="offline">${S.source === "cache" ? "오프라인 저장본을 보여드리고 있습니다. " : ""}${outbox.length ? `아직 못 올린 기록 ${outbox.length}건이 휴대폰에 있습니다. ` : ""}연결되면 자동으로 ${outbox.length ? "올립니다" : "새로 불러옵니다"}.</div>` : ""}${body}
     <div class="foot"><span>서울 기준 ${esc(synced)}에 불러온 일정</span><button class="btn sm" data-reload>${SVG.refresh}새로고침</button><button class="btn sm ghost" data-logout>로그아웃</button></div></main>` + tabbar();
   window.scrollTo(0, sy);
   const cur = app.querySelector('.day[aria-current="true"]'); cur?.scrollIntoView({ inline: "center", block: "nearest" });
@@ -692,41 +746,87 @@ let toastTimer;
 function toast(msg, action) { $(".toast")?.remove(); clearTimeout(toastTimer); const t = document.createElement("div"); t.className = "toast"; t.setAttribute("role", "status"); t.innerHTML = `<span>${esc(msg)}</span>`; if (action) { const b = document.createElement("button"); b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); } document.body.appendChild(t); toastTimer = setTimeout(() => t.remove(), action ? 5000 : 2200); }
 
 /* ── 쓰기 ── */
+/* 오프라인 보관함: 연결이 끊겨 보내지 못한 기록(완료·건너뜀, 체크, 할 일, 식당 선택, 메모)을 휴대폰에 두었다가 연결되면 자동 전송.
+   같은 대상의 기록은 마지막 것만 남긴다(key). 메모 새로 쓰기는 임시 id(음수)로 화면에 먼저 보여 준다. */
+const OUTBOX_KEY = "hm-outbox-v1";
+let outbox = ls.get(OUTBOX_KEY) || [], flushing = false;
+const saveOutbox = () => ls.set(OUTBOX_KEY, outbox);
+const isNetErr = e => (typeof navigator !== "undefined" && navigator.onLine === false) || /fetch|network|load failed|offline|timed? ?out|disconnected/i.test(String(e?.message || e || ""));
+function enqueue(key, fn, args) { outbox = outbox.filter(x => x.key !== key); outbox.push({ key, fn, args, at: Date.now() }); saveOutbox(); ls.set(CACHE_KEY, S.data); }
+const QUEUED = "오프라인이라 휴대폰에 먼저 저장했어요. 연결되면 자동으로 올립니다";
+/* 보내기: 성공 → 결과, 네트워크 문제 → 보관함에 넣고 {queued:true}, 그 밖의 오류 → throw */
+async function send(key, fn, args) {
+  if (outbox.length && !flushing) await flush();
+  try { return { data: await rpc(fn, args) }; }
+  catch (e) { if (!isNetErr(e)) throw e; enqueue(key, fn, args); render(); return { queued: true }; }
+}
+async function flush() {
+  if (flushing || !outbox.length) return; flushing = true; let sent = 0;
+  try {
+    while (outbox.length) {
+      const job = outbox[0];
+      try { const r = await rpc(job.fn, job.args);
+        if (job.fn === "trip_memo_save" && job.args.p_id == null && job.tmp != null && r) replaceMemoId(job.tmp, r);
+        sent++; } catch (e) { if (isNetErr(e)) break; /* 서버가 거절한 기록은 버린다(되살릴 수 없는 상태) */ }
+      outbox.shift(); saveOutbox();
+    }
+  } finally { flushing = false; }
+  if (sent) { ls.set(CACHE_KEY, S.data); render(); toast(`오프라인에서 남긴 기록 ${sent}건을 올렸습니다`); }
+}
+function replaceMemoId(tmp, m) { const ms = D().memos || []; const i = ms.findIndex(x => x.id === tmp); if (i >= 0) ms[i] = m; outbox.forEach(j => { if (j.args?.p_id === tmp) j.args.p_id = m.id; if (j.key === "mm:" + tmp) j.key = "mm:" + m.id; }); saveOutbox(); }
+
 async function savePick(sid, oid) {
   let sl; days().forEach(x => (x.dining || []).forEach(s => { if (s.sid === sid) sl = s; }));
   const prev = sl.o.map(o => o.status); const was = sl.o.find(o => o.id === oid)?.status === "chosen"; const target = was ? null : oid;
   sl.o.forEach(o => { if (o.status === "chosen") o.status = "candidate"; if (o.id === target) o.status = "chosen"; }); closeSheet(); render();
-  try { await rpc("trip_dining_pick", { p_slot_id: sid, p_option_id: target }); ls.set(CACHE_KEY, S.data); toast(target ? "식당을 정했습니다" : "선택을 취소했습니다"); }
-  catch (e) { sl.o.forEach((o, i) => o.status = prev[i]); render(); toast("저장하지 못했습니다. 연결을 확인해 주세요"); }
+  try { const r = await send("pk:" + sid, "trip_dining_pick", { p_slot_id: sid, p_option_id: target }); ls.set(CACHE_KEY, S.data); toast(r.queued ? QUEUED : target ? "식당을 정했습니다" : "선택을 취소했습니다"); }
+  catch (e) { sl.o.forEach((o, i) => o.status = prev[i]); render(); toast("저장하지 못했습니다"); }
 }
 async function saveCheck(dayId, infoId, done) {
   const D0 = D(); D0.checks = (D0.checks || []).filter(c => !(c.day === dayId && c.info === infoId));
   if (done) D0.checks.push({ day: dayId, info: infoId }); ls.set(CACHE_KEY, S.data); render();
-  try { await rpc("trip_day_check", { p_day_id: dayId, p_info_id: infoId, p_done: done }); }
-  catch (e) { toast("저장하지 못했습니다. 연결을 확인해 주세요"); load(true); }
+  try { const r = await send(`ck:${dayId}:${infoId}`, "trip_day_check", { p_day_id: dayId, p_info_id: infoId, p_done: done }); if (r.queued) toast(QUEUED); }
+  catch (e) { toast("저장하지 못했습니다"); load(true); }
 }
 async function saveStatus(id, st, reopen = true) {
   const it = allItems().find(x => x.id === id); if (!it || it.st === st) return; const prev = it.st || "planned";
   const raw = days().flatMap(d => d.items || []).find(x => x.id === id); raw.st = st; ls.set(CACHE_KEY, S.data); render(); if (reopen) openItem(id);
-  toast(st === "done" ? (reopen ? "완료로 표시했습니다" : "방문 완료로 표시했습니다")  : st === "skipped" ? "건너뜀으로 표시했습니다. 길찾기 동선에서 빠집니다" : "예정으로 되돌렸습니다");
-  try { await rpc("trip_item_status", { p_id: id, p_status: st }); }
-  catch (e) { raw.st = prev; ls.set(CACHE_KEY, S.data); render(); if (reopen && S.sheet?.id === id) openItem(id); toast("저장하지 못했습니다. 연결을 확인해 주세요"); }
+  try { const r = await send("st:" + id, "trip_item_status", { p_id: id, p_status: st });
+    toast(r.queued ? QUEUED : st === "done" ? (reopen ? "완료로 표시했습니다" : "방문 완료로 표시했습니다") : st === "skipped" ? "건너뜀으로 표시했습니다. 길찾기 동선에서 빠집니다" : "예정으로 되돌렸습니다"); }
+  catch (e) { raw.st = prev; ls.set(CACHE_KEY, S.data); render(); if (reopen && S.sheet?.id === id) openItem(id); toast("저장하지 못했습니다"); }
 }
 async function saveTodo(id, done) {
   const td = D().todos.find(t => t.id === id); const prev = td.done; td.done = done; render();
-  try { await rpc("trip_todo_set", { p_id: id, p_done: done }); ls.set(CACHE_KEY, S.data); } catch (e) { td.done = prev; render(); toast("저장하지 못했습니다"); }
+  try { const r = await send("td:" + id, "trip_todo_set", { p_id: id, p_done: done }); ls.set(CACHE_KEY, S.data); if (r.queued) toast(QUEUED); } catch (e) { td.done = prev; render(); toast("저장하지 못했습니다"); }
 }
+const sortMemos = ms => ms.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated));
 async function saveMemo({ id, body, dayId, itemId, pinned }) {
   if (!body.trim()) { toast("메모 내용을 입력해 주세요"); return false; }
-  try { const m = await rpc("trip_memo_save", { p_id: id || null, p_body: body, p_day_id: dayId, p_item_id: itemId || null, p_pinned: !!pinned });
-    const ms = D().memos; const i = ms.findIndex(x => x.id === m.id); if (i >= 0) ms[i] = m; else ms.unshift(m);
-    ms.sort((a, b) => (b.pinned - a.pinned) || (b.updated - a.updated)); ls.set(CACHE_KEY, S.data); toast(id ? "메모를 수정했습니다" : "메모를 추가했습니다"); return true; }
-  catch (e) { toast("메모를 저장하지 못했습니다. 연결을 확인해 주세요"); return false; }
+  const ms = D().memos || (D().memos = []); const nowS = Math.floor(Date.now() / 1000);
+  /* 아직 못 올린 새 메모를 고치면 보관함의 내용만 바꾼다 */
+  if (id != null && id < 0) { const m = ms.find(x => x.id === id); const job = outbox.find(j => j.key === "mm:" + id);
+    if (m) Object.assign(m, { body, pinned: !!pinned, updated: nowS }); if (job) { Object.assign(job.args, { p_body: body, p_pinned: !!pinned }); saveOutbox(); }
+    sortMemos(ms); ls.set(CACHE_KEY, S.data); toast("메모를 수정했습니다 (연결되면 올립니다)"); return true; }
+  const args = { p_id: id || null, p_body: body, p_day_id: dayId, p_item_id: itemId || null, p_pinned: !!pinned };
+  try { const r = await send("mm:" + (id || "new"), "trip_memo_save", args);
+    if (r.queued) {
+      if (id) { const m = ms.find(x => x.id === id); if (m) Object.assign(m, { body, pinned: !!pinned, updated: nowS }); }
+      else { const tmp = -Date.now(); const job = outbox.find(j => j.key === "mm:new"); if (job) { job.key = "mm:" + tmp; job.tmp = tmp; saveOutbox(); }
+        ms.unshift({ id: tmp, body, day_id: dayId, item_id: itemId || null, pinned: !!pinned, author: S.me, created: nowS, updated: nowS, pending: true }); }
+      sortMemos(ms); ls.set(CACHE_KEY, S.data); toast(QUEUED); return true; }
+    const m = r.data; const i = ms.findIndex(x => x.id === m.id); if (i >= 0) ms[i] = m; else ms.unshift(m);
+    sortMemos(ms); ls.set(CACHE_KEY, S.data); toast(id ? "메모를 수정했습니다" : "메모를 추가했습니다"); return true; }
+  catch (e) { toast("메모를 저장하지 못했습니다"); return false; }
 }
 async function removeMemo(id) {
   const ms = D().memos; const i = ms.findIndex(x => x.id === id); if (i < 0) return; const [m] = ms.splice(i, 1); render();
-  try { await rpc("trip_memo_remove", { p_id: id }); ls.set(CACHE_KEY, S.data);
-    toast("메모를 삭제했습니다", { label: "되돌리기", fn: async () => { try { await rpc("trip_memo_restore", { p_id: id }); ms.splice(Math.min(i, ms.length), 0, m); ls.set(CACHE_KEY, S.data); render(); toast("메모를 되살렸습니다"); } catch (e) { toast("되돌리지 못했습니다"); } } }); }
+  if (id < 0) { outbox = outbox.filter(j => j.key !== "mm:" + id); saveOutbox(); ls.set(CACHE_KEY, S.data); toast("메모를 삭제했습니다"); return; }
+  try { const r = await send("mr:" + id, "trip_memo_remove", { p_id: id }); ls.set(CACHE_KEY, S.data);
+    const undo = async () => {
+      if (outbox.some(j => j.key === "mr:" + id)) { outbox = outbox.filter(j => j.key !== "mr:" + id); saveOutbox(); }
+      else { try { await rpc("trip_memo_restore", { p_id: id }); } catch (e) { toast("되돌리지 못했습니다"); return; } }
+      ms.splice(Math.min(i, ms.length), 0, m); ls.set(CACHE_KEY, S.data); render(); toast("메모를 되살렸습니다"); };
+    toast(r.queued ? "메모를 삭제했습니다 (연결되면 반영)" : "메모를 삭제했습니다", { label: "되돌리기", fn: undo }); }
   catch (e) { ms.splice(i, 0, m); render(); toast("삭제하지 못했습니다"); }
 }
 
@@ -749,12 +849,14 @@ async function saveGKey(v) {
 
 /* ── 이벤트 ── */
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus],[data-gkey-del]");
+  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-sim-step],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus],[data-gkey-del]");
   if (!el) return;
   const ds = el.dataset;
   if (ds.tab) { S.tab = ds.tab; S.editId = null; S.focus = null; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
-  if (ds.goto) { if (ds.gday != null) S.sel = +ds.gday; else if (S.tab === "today" && phase() === "during") S.sel = curDayIdx(); S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; closeSheet(); render(); window.scrollTo(0, 0); return; }
-  if (ds.day != null) { S.sel = +ds.day; S.editId = null; S.focus = null; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
+  if (ds.goto) { if (ds.gday != null) S.sel = +ds.gday; else if (ds.day != null) S.sel = +ds.day; else if (S.tab === "today" && phase() === "during") S.sel = curDayIdx(); S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; closeSheet(); render(); window.scrollTo(0, 0); return; }
+  if (ds.day != null) { const ni = +ds.day; S.editId = null; S.focus = null;
+    if (S.tab === "today" && S.sim) { const od = selDay(), nd = days()[ni]; const tod = S.sim - midnight(od.date, od.tz); S.sel = ni; S.sim = midnight(nd.date, nd.tz) + tod; closeSheet(); render(); return; }
+    S.sel = ni; if (S.tab === "today") S.tab = "plan"; closeSheet(); render(); window.scrollTo(0, 0); return; }
   if (ds.step) { S.sel = Math.min(days().length - 1, Math.max(0, S.sel + +ds.step)); render(); window.scrollTo(0, 0); return; }
   if (ds.gkeyDel != null) { await saveGKey(null); return; }
   if (ds.hfocus != null) { S.focus = +ds.hfocus < 0 ? null : +ds.hfocus; render(); return; }
@@ -769,6 +871,8 @@ document.addEventListener("click", async e => {
   if (ds.info) { S.infoTab = ds.info; render(); return; }
   if (ds.memof) { S.memoFilter = ds.memof; render(); return; }
   if (ds.travel != null) { S.travelMode = S.travelMode === "walking" ? "transit" : "walking"; render(); return; }
+  if (ds.memoEdit && !$("#quick-memo")) { const m = (D().memos || []).find(x => x.id === +ds.memoEdit); if (!m) return; const d = days().find(x => x.id === m.day_id);
+    if (d) S.sel = days().indexOf(d); S.tab = "plan"; S.editingMemo = m.id; render(); $("#memo-form")?.scrollIntoView({ block: "center" }); $("#memo-body")?.focus(); return; }
   if (ds.memoEdit) { const m = (D().memos || []).find(x => x.id === +ds.memoEdit); const f = $("#quick-memo"); if (m && f) { f.dataset.mid = m.id; $("#qm").value = m.body; f.querySelector("button[type=submit]").textContent = "수정"; $("#qm").focus(); } return; }
   if (ds.memoDel) { await removeMemo(+ds.memoDel); if (S.sheet?.type === "item") openItem(S.sheet.id); return; }
   if (ds.editItem) { const it = allItems().find(x => x.id === +ds.editItem); if (it) S.sel = days().indexOf(it.day); S.tab = "edit"; S.editId = +ds.editItem; closeSheet(); render(); $(`#item-form`)?.scrollIntoView({ block: "center" }); return; }
@@ -780,10 +884,14 @@ document.addEventListener("click", async e => {
   if (ds.phrase != null) { const lang = selDay().city === "파리" ? "fr" : "it"; const p = D().guide.phrases[+ds.phrase]; const o = document.createElement("div"); o.className = "overlay"; o.setAttribute("role", "dialog"); o.innerHTML = `<div class="big">${esc(p[lang])}</div><div class="alt">${esc(p.ko)}</div><button class="btn primary" style="align-self:flex-start">닫기</button>`; o.onclick = () => o.remove(); document.body.appendChild(o); return; }
   if (ds.reload != null) { await load(false); return; }
   if (ds.logout != null) { try { await initSb()?.auth.signOut(); } catch (err) {} S.data = null; S.source = "login"; try { localStorage.removeItem(CACHE_KEY); } catch (err) {} render(); return; }
-  if (ds.simOpen != null) { const i = 3; const d = days()[i]; S.sim = midnight(d.date, d.tz) + 14 * 3600; S.sel = i; render(); toast("Day 4 오후 2시로 미리보기 중입니다"); return; }
+  if (ds.simOpen != null) { const i = 3; const d = days()[i]; S.sim = midnight(d.date, d.tz) + 14 * 3600; S.sel = i; render(); toast("Day 4 오후 2시 미리보기입니다. 위 날짜와 ±1시간 버튼으로 다른 때도 볼 수 있어요"); return; }
+  if (ds.simStep) { S.sim += +ds.simStep; S.focus = null; render(); return; }
   if (ds.simOff != null) { S.focus = null; S.sim = null; S.sel = null; render(); return; }
 });
-document.addEventListener("change", e => { const el = e.target;
+const TYPE_GUESS = [[/점심|저녁|아침|식사|레스토랑|트라토리아|비스트로|브런치/, "meal"], [/카페|커피|젤라또|디저트|빵|베이커리/, "cafe"], [/쇼핑|시장|마켓|아울렛|기념품/, "shopping"], [/노을|일몰|야경|사진|스냅/, "photo"], [/택시|이동|버스|메트로|지하철/, "transfer"], [/기차|열차|역\b/, "train"], [/휴식|자유/, "free"]];
+document.addEventListener("input", e => { const el = e.target; if (el.id !== "f-title") return; const f = $("#item-form"); const sel = $("#f-type"); if (!f || f.dataset.id || !sel || sel.dataset.touched) return;
+  const g = TYPE_GUESS.find(([re]) => re.test(el.value)); sel.value = g ? g[1] : "visit"; });
+document.addEventListener("change", e => { const el = e.target; if (el.id === "f-type") el.dataset.touched = "1";
   if (el.dataset.todo) saveTodo(+el.dataset.todo, el.checked);
   if (el.dataset.dcheck) { const [d, i] = el.dataset.dcheck.split(":").map(Number); saveCheck(d, i, el.checked); }
   if (el.id === "memo-day") { const form = $("#memo-form"); const i = +el.value; const items = days()[i]?.items || []; $("#memo-item").innerHTML = `<option value="">날짜 전체</option>` + items.map(it => `<option value="${it.id}">${hm(it.s, it.tz)} ${esc(it.ti)}</option>`).join(""); }
@@ -795,7 +903,7 @@ document.addEventListener("submit", async e => {
     const btn = f.querySelector("button[type=submit]"); btn.disabled = true; btn.textContent = "확인 중";
     const { error } = await c.auth.signInWithPassword({ email: em, password: pw });
     if (error) { btn.disabled = false; btn.textContent = "로그인"; $("#login-err").textContent = /Invalid login/i.test(error.message) ? "이메일 또는 비밀번호가 맞지 않습니다." : "로그인하지 못했습니다: " + error.message; return; }
-    S.source = ""; render(); await load(true); return;
+    S.me = em; S.source = ""; render(); await load(true); return;
   }
   if (f.id === "memo-form") {
     const id = f.dataset.id ? +f.dataset.id : null; const d = days()[+$("#memo-day").value]; const btn = f.querySelector("button[type=submit]"); btn.disabled = true;
@@ -811,9 +919,10 @@ document.addEventListener("submit", async e => {
 document.addEventListener("keydown", e => { if (e.key === "Escape") { closeSheet(); document.querySelector(".overlay")?.remove(); } });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.data && Date.now() - S.lastLoad > 60000) load(true); });
 window.addEventListener("online", () => { if (S.data) load(true); });
+setInterval(() => { if (outbox.length && navigator.onLine !== false) flush(); }, 30000);
 /* 상단 시계는 탭과 상관없이 15초마다 갱신 */
 setInterval(() => { const c = $(".clock"); if (!c || !S.data) return; const d = selDay(); const t = now();
-  c.querySelector("b").textContent = hm(t, d?.tz); c.querySelector("span").textContent = `${d?.city || "현지"}${S.sim ? " 미리보기" : ""} · 서울 ${hm(t, "Asia/Seoul")}`; }, 15000);
+  c.innerHTML = clockHTML(t, d); }, 15000);
 setInterval(() => { if (!S.sim && S.data && (S.tab === "today") && !S.sheet && !document.activeElement?.closest?.("form")) render(); }, 60000);
 
 /* ── 시작 ── */
@@ -823,6 +932,7 @@ setInterval(() => { if (!S.sim && S.data && (S.tab === "today") && !S.sheet && !
   if (!c) { if (cache) { S.data = cache; S.source = "cache"; } else S.source = "error"; render(); return; }
   const { data: { session } } = await c.auth.getSession();
   if (!session) { S.source = "login"; render(); return; }
+  S.me = session.user?.email || "";
   if (cache) { S.data = cache; S.source = "cache"; render(); }
   await load(true);
   c.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_OUT") { S.data = null; S.source = "login"; render(); } });
