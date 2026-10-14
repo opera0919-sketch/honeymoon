@@ -402,3 +402,56 @@ nav.tabs button[aria-selected="true"]{color:var(--city)}
 .more .nr{display:flex;align-items:center;gap:6px;padding:8px 0}
 .more .nr + .nr{border-top:1px solid var(--line)}
 .more .nr .nm{flex:1;min-width:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ── v6: 여백 넉넉하게 · 메인 카드 지도 · 편집 화면 ── */
+body{line-height:1.6}
+.sec-h{margin:30px 16px 12px}
+.card{padding:18px}
+.now{gap:16px;padding:20px 18px 18px}
+.now .count{font-size:15.5px;font-weight:700;white-space:nowrap;line-height:1.35;align-self:flex-end}
+.now .next{padding-top:16px}
+.now .next .t{display:flex;flex-direction:column;gap:2px}
+.now .dots-h{margin-top:4px}
+.hero-map{margin:0;height:210px;min-height:0;border-radius:16px;box-shadow:none}
+.bands{gap:10px;margin-top:14px}
+.band{padding:14px 14px 14px 16px}
+.band .tx{gap:2px}
+.leg2{padding:12px 14px}
+.leg2 .tx{gap:2px}
+.stages{padding:8px}
+.stg{padding:14px 12px;gap:12px}
+.stg .tx{gap:2px}
+.stop .body{padding:7px 0}
+.stop .tm{padding-top:16px}
+.stop .num{margin-top:14px}
+.stop.dot .num{margin-top:20px}
+.row-btn{padding:14px 15px}
+.row-btn .tx{gap:5px}
+.gap{padding:6px 0 6px 86px}
+.sunline{padding:8px 0}
+.chk{padding:14px 0}
+.chk .tx{gap:4px}
+.opt{padding:16px 0;gap:8px}
+.slot-h{margin-bottom:12px}
+.more .nr{padding:11px 0}
+.deadline{margin-top:14px}
+@media (prefers-color-scheme: dark){ .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7)} }
+/* 편집 */
+.elist{padding:8px}
+.erow{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;text-align:left;padding:14px 12px;border-radius:12px}
+.erow + .erow, .elist .iform + .erow, .elist .erow + .iform{box-shadow:0 -1px 0 var(--line)}
+.erow .tm{width:44px;flex-shrink:0;font-size:13.5px;font-weight:700;color:var(--ink2)}
+.erow .mk{width:10px;height:10px;border-radius:50%;flex-shrink:0;background:var(--k)}
+.erow .tx{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;line-height:1.35}
+.erow .tx b{font-size:14.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.erow .tx span{font-size:12.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.erow .go{color:var(--mute)} .erow .go svg{width:18px;height:18px}
+.erow.skip .tx b{text-decoration:line-through}
+.iform{display:flex;flex-direction:column;gap:14px;margin:0 16px;box-shadow:0 0 0 2px var(--city),var(--shadow)}
+.elist .iform{margin:6px 0}
+.iform h3{margin:0;font-size:16px}
+.iform .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.iform .row2 .field{min-width:0}
+.iform .field label small{font-weight:500}
+.iform .field input,.iform .field select,.iform .field textarea{padding:11px 12px}
+.iform .acts{display:flex;gap:8px;align-items:center}

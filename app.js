@@ -41,7 +41,7 @@ const S = {
   infoTab: "book", dineFilter: "day", memoFilter: "all", travelMode: "walking",
   sheet: null, editingMemo: null, lastLoad: 0, loading: false
 };
-const ui0 = ls.get(UI_KEY); if (ui0) Object.assign(S, { tab: ui0.tab || "today", infoTab: ui0.infoTab || "book", dineFilter: ["day", "open", "all"].includes(ui0.dineFilter) ? ui0.dineFilter : "day", travelMode: ui0.travelMode || "walking" });
+const ui0 = ls.get(UI_KEY); if (ui0) Object.assign(S, { tab: ["today", "plan", "dine", "edit", "info"].includes(ui0.tab) ? ui0.tab : "today", infoTab: ui0.infoTab || "book", dineFilter: ["day", "open", "all"].includes(ui0.dineFilter) ? ui0.dineFilter : "day", travelMode: ui0.travelMode || "walking" });
 const saveUI = () => ls.set(UI_KEY, { tab: S.tab, infoTab: S.infoTab, dineFilter: S.dineFilter, travelMode: S.travelMode });
 
 /* ── 시간 ── */
@@ -177,7 +177,8 @@ function ensureMap() {
 }
 function setTiles() {
   if (!map) return; if (tileLayer) map.removeLayer(tileLayer);
-  tileLayer = L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark() ? "dark_all" : "rastertiles/voyager"}/{z}/{x}/{y}{r}.png`, { maxZoom: 19, subdomains: "abcd", attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>' }).addTo(map);
+  /* CARTO 무료 타일이 API 키 필수로 바뀌어(워터마크) OpenStreetMap 기본 타일 사용. 다크 모드는 CSS 필터로 어둡게 */
+  tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 기여자' }).addTo(map);
 }
 function mountMap() {
   const slot = $("#map-slot"); if (!slot) return;
@@ -294,7 +295,7 @@ function dayDots(day, t) {
   const dots = st.map((s, i) => { const past = s.done || end(s) < t && i !== ci; const cls = s.skip ? "skip" : i === ci ? "cur" : past ? "past" : "";
     return `<button class="d ${cls}" data-item="${s.items[0].id}" aria-label="${i + 1}번 ${esc(s.label)} 보기">${s.cat === "hotel" ? "숙" : i + 1}</button>`; }).join("<b></b>");
   const done = spots.filter(s => s.done || end(s) < t).length;
-  return `<div class="dots-h"><span>오늘 동선 ${Math.min(curSpot, spots.length)} / ${spots.length}</span><span>${done}곳 지남 · 번호를 누르면 상세</span></div><div class="dots">${dots}</div>`;
+  return `<div class="dots-h"><span>오늘 동선 ${Math.min(curSpot, spots.length)} / ${spots.length}</span><span>${done}개 지났어요</span></div><div class="dots">${dots}</div>`;
 }
 /* 메인 카드 안 시간대 진행바 (일정 시작~끝, 일몰 표시) */
 function heroBar(day, t, live) {
@@ -331,7 +332,9 @@ function mealSlots(day) {
     return { sl, ch, it, decided: !!(ch || it?.pl) }; });
 }
 function mealBands(day) {
-  return mealSlots(day).filter(m => !m.decided).map(m => `<button class="band warn" data-goto="dine"><span class="bd-dot"></span><span class="tx"><b>${MEAL[m.sl.meal]} 장소를 아직 정하지 않았어요</b><span>후보 ${m.sl.o.length}곳 중에서 골라 주세요</span></span><span class="go">고르기${SVG.chev}</span></button>`).join("");
+  const open = mealSlots(day).filter(m => !m.decided); if (!open.length) return "";
+  /* 고를 때까지 계속 표시(상태 기반이라 식당 탭에 갔다가 그냥 나와도 남음) */
+  return `<button class="band warn" data-goto="dine"><span class="bd-dot"></span><span class="tx"><b>식사 장소를 골라볼까요?</b><span>${open.map(m => MEAL[m.sl.meal]).join("·")} 미정 · 후보 ${open.reduce((n, m) => n + m.sl.o.length, 0)}곳</span></span><span class="go">고르기${SVG.chev}</span></button>`;
 }
 /* 그날 챙길 것 */
 function dayChecks(day, live) {
@@ -373,8 +376,9 @@ function viewToday() {
       ${tgt ? `<div class="acts">${isDone ? `<span class="done-chip">✓ 방문 완료</span><button class="btn sm" data-hst="${tgt.id}:planned">되돌리기</button>` : `<button class="btn sm solid" data-hst="${tgt.id}:done">✓ 방문 완료</button>`}</div>` : ""}
       ${heroBar(day, t, live)}
       ${dayDots(day, t)}
-      ${nxt ? `<div class="next"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}</b></div><div class="count"><b>${dur(nxt.s - t)}</b><span>뒤</span></div></div>
-        ${legHTML(day, from, nxt)}` : ""}</section>`;
+      ${nxt ? `<div class="next"><div class="t"><span class="sub">다음 · ${hm(nxt.s, nxt.tz)}</span><b>${esc(nxt.ti)}</b></div><div class="count">${dur(nxt.s - t)} 뒤</div></div>` : ""}
+      <div class="mapcard hero-map"><div id="map-slot" style="position:absolute;inset:0"></div></div>
+      ${nxt ? legHTML(day, from, nxt) : ""}</section>`;
   }
   const dl = items.find(it => ["flight", "train", "checkout"].includes(it.t) && it.s > t);
   let dlh = "";
@@ -433,34 +437,63 @@ function viewDine() {
     ${more}`;
 }
 
-/* ── 메모 ── */
-function memoComposer(m) {
-  const d = m ? days().find(x => x.id === m.day_id) : selDay();
-  const di = d ? days().indexOf(d) : (S.sel ?? 0);
-  const items = days()[di]?.items || [];
-  return `<form class="composer card" id="memo-form" style="margin:0 16px" data-id="${m?.id ?? ""}">
-    <div class="field"><label for="memo-body">${m ? "메모 수정" : "새 메모"}</label><textarea id="memo-body" maxlength="4000" placeholder="예: 생트샤펠 보안검색 줄 20분, 13:05 도착하면 여유 있음">${esc(m?.body || "")}</textarea></div>
-    <div class="row"><div class="field"><label for="memo-day">날짜</label><select id="memo-day">${days().map((x, i) => `<option value="${i}" ${i === di ? "selected" : ""}>Day ${x.n} · ${mdShort(x.date)} ${x.city}</option>`).join("")}</select></div>
-      <div class="field"><label for="memo-item">연결할 일정 (선택)</label><select id="memo-item"><option value="">날짜 전체</option>${items.map(it => `<option value="${it.id}" ${m?.item_id === it.id ? "selected" : ""}>${hm(it.s, it.tz)} ${esc(it.ti)}</option>`).join("")}</select></div></div>
-    <div class="row"><label class="check"><input type="checkbox" id="memo-pin" ${m?.pinned ? "checked" : ""}>위에 고정</label><span style="flex:1"></span>${m ? `<button type="button" class="btn sm" data-memo-cancel>취소</button>` : ""}<button class="btn primary sm" type="submit">${m ? "수정 저장" : "메모 추가"}</button></div>
+/* ── 일정 편집 ── */
+let placesLoading = false;
+async function loadPlaces() {
+  if (S.places || placesLoading) return; placesLoading = true;
+  /* 입력 중인 폼을 지우지 않도록 전체 렌더 대신 목록만 교체 */
+  try { S.places = (await rpc("trip_place_list")) || []; } catch (e) { S.places = []; } finally { placesLoading = false; }
+  const dl = $("#pl-list"); if (dl) dl.innerHTML = plOptions(selDay()); const fp = $("#f-place"); if (fp && !fp.value) fp.placeholder = "장소 이름";
+}
+const TYPE_ORDER = ["visit", "tour", "meal", "cafe", "photo", "shopping", "free", "queue", "transfer", "train", "flight", "checkin", "checkout"];
+function itemForm(day, it) {
+  const tz = it?.tz || day.tz, etz = it?.etz || tz;
+  const end = it?.e != null ? hm(it.e, etz) : "";
+  const move = it && (it.t === "flight" || it.t === "train");
+  return `<form class="card iform" id="item-form" data-id="${it?.id ?? ""}" data-tz="${esc(tz)}" data-etz="${esc(it?.etz || "")}" data-pid="${it?.pid ?? ""}" data-pl="${esc(it?.pl || "")}">
+    <h3>${it ? "일정 수정" : "새 일정"}</h3>
+    <div class="field"><label for="f-type">종류</label><select id="f-type">${TYPE_ORDER.map(k => `<option value="${k}" ${(it?.t || "visit") === k ? "selected" : ""}>${TYPE[k][0]}</option>`).join("")}</select></div>
+    <div class="row2"><div class="field"><label for="f-start">시작</label><input id="f-start" type="time" value="${it?.s != null ? hm(it.s, tz) : ""}"></div>
+      <div class="field"><label for="f-end">끝${it?.etz && it.etz !== tz ? " (도착지 시각)" : ""}</label><input id="f-end" type="time" value="${end}"></div></div>
+    <div class="field"><label for="f-title">제목</label><input id="f-title" required maxlength="120" value="${esc(it?.ti || "")}" placeholder="예: 오르세 미술관"></div>
+    <div class="field"><label for="f-place">장소 <small class="muted">목록에서 고르거나 새 이름 입력</small></label><input id="f-place" list="pl-list" autocomplete="off" value="${esc(it?.pl || "")}" placeholder="${S.places ? "장소 이름" : "장소 목록 불러오는 중…"}"></div>
+    <div class="field"><label for="f-addr">새 장소 주소 <small class="muted">(목록에 없는 장소일 때만, 선택)</small></label><input id="f-addr" maxlength="200" placeholder="주소를 넣으면 지도 위치를 자동으로 찾습니다"></div>
+    <div class="field"><label for="f-note">메모</label><textarea id="f-note" maxlength="2000" rows="3">${esc(it?.no || "")}</textarea></div>
+    ${move ? `<p class="small muted" style="margin:0">항공·기차 시각을 바꿔도 예약 정보(예약·정보 탭)의 시각은 그대로입니다.</p>` : ""}
+    <div class="acts">${it ? `<button type="button" class="btn ghost" data-edit-del="${it.id}" style="color:var(--crit)">삭제</button>` : ""}<span style="flex:1"></span><button type="button" class="btn" data-edit-cancel>취소</button><button type="submit" class="btn primary">저장</button></div>
   </form>`;
 }
-function memoCard(m) {
-  const d = days().find(x => x.id === m.day_id); const it = d?.items?.find(x => x.id === m.item_id);
-  const when = new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: d?.tz || "Asia/Seoul" }).format(new Date((m.updated || m.created) * 1000));
-  return `<article class="card memo ${m.pinned ? "pinned" : ""}" style="margin:0 16px"><div class="bd">${esc(m.body)}</div>
-    <div class="ft">${m.pinned ? pill("고정", "p-city") : ""}${d ? `<button class="pill p-mute" data-day="${days().indexOf(d)}" style="border:0">Day ${d.n}${it ? " · " + esc(it.ti) : ""}</button>` : ""}<span>${esc(who(m.author))} · ${when}</span><span class="sp"></span>
-      <button class="btn sm ghost" data-memo-edit="${m.id}">수정</button><button class="btn sm ghost" data-memo-del="${m.id}" style="color:var(--crit)">삭제</button></div></article>`;
+const plOptions = day => (S.places || []).filter(p => p.c === day.city || p.c === "인천").map(p => `<option value="${esc(p.n)}">${esc([p.l, p.c].filter(Boolean).join(" · "))}</option>`).join("");
+function viewEdit() {
+  const day = selDay(); setCity(day); setTimeout(loadPlaces, 0);
+  const items = day.items || [];
+  const row = it => S.editId === it.id ? itemForm(day, it) : `<button class="erow ${it.st === "skipped" ? "skip" : ""}" data-edit-open="${it.id}" style="--k:${TYPE[it.t]?.[1] || "var(--free)"}"><span class="tm">${it.s != null ? hm(it.s, it.tz) : "--:--"}</span><span class="mk"></span><span class="tx"><b>${esc(it.ti)}</b><span>${esc(TYPE[it.t]?.[0] || it.t)}${it.pl ? " · " + esc(it.pl) : ""}</span></span><span class="go">${SVG.memo}</span></button>`;
+  return `<div class="sec-h"><h2>Day ${day.n} 일정 편집</h2><span>${mdShort(day.date)} · ${esc(day.city)}</span></div>
+    <p class="small muted" style="margin:-4px 16px 12px">위 날짜를 눌러 다른 날로 바꿀 수 있습니다. 저장하면 두 분 화면에 함께 반영되고 시간순으로 정렬됩니다.</p>
+    <datalist id="pl-list">${plOptions(day)}</datalist>
+    <section class="card elist" style="margin:0 16px">${items.length ? items.map(row).join("") : `<div class="empty" style="padding:18px 0">이 날은 일정이 없습니다.</div>`}</section>
+    ${S.editId === "new" ? `<div style="height:12px"></div>${itemForm(day, null)}` : `<div style="padding:12px 16px 0"><button class="btn block" data-edit-open="new">＋ 일정 추가</button></div>`}`;
 }
-function viewMemo() {
-  const day = selDay(); setCity(day); const ms = D().memos || []; const f = S.memoFilter;
-  const list = f === "day" ? ms.filter(m => m.day_id === day.id) : ms;
-  const editing = S.editingMemo != null ? ms.find(m => m.id === S.editingMemo) : null;
-  return `<div class="sec-h"><h2>메모</h2><span>${ms.length}개 · 두 분이 함께 봅니다</span></div>
-    ${memoComposer(editing)}
-    <div style="height:12px"></div>
-    <div class="chips"><button class="chip" data-memof="all" aria-pressed="${f === "all"}">전체</button><button class="chip" data-memof="day" aria-pressed="${f === "day"}">Day ${day.n}만</button></div>
-    <div class="stack" style="margin-top:12px">${list.length ? list.map(memoCard).join("") : `<div class="empty">아직 메모가 없습니다. 위에서 첫 메모를 남겨 보세요.<br>일정 화면에서 장소를 눌러도 그 장소에 바로 메모할 수 있습니다.</div>`}</div>`;
+async function saveItem(f) {
+  const day = selDay(); const btn = f.querySelector("button[type=submit]");
+  const title = $("#f-title").value.trim(); if (!title) { toast("제목을 입력해 주세요"); return; }
+  const plName = $("#f-place").value.trim();
+  let pid = null, newName = null;
+  if (plName) { if (f.dataset.pid && plName === f.dataset.pl) pid = +f.dataset.pid;
+    else { const hit = (S.places || []).find(p => p.n === plName && (p.c === day.city || p.c === "인천")) || (S.places || []).find(p => p.n === plName); if (hit) pid = hit.id; else newName = plName; } }
+  btn.disabled = true; btn.textContent = "저장 중";
+  try {
+    await rpc("trip_item_save", { p_id: f.dataset.id ? +f.dataset.id : null, p_day_id: day.id, p_type: $("#f-type").value, p_title: title,
+      p_start: $("#f-start").value || null, p_end: $("#f-end").value || null, p_tz: f.dataset.tz || day.tz, p_etz: f.dataset.etz || null,
+      p_place_id: pid, p_place_name: newName, p_place_addr: newName ? $("#f-addr").value.trim() || null : null, p_note: $("#f-note").value });
+    S.editId = null; if (newName) S.places = null; await load(true); toast(f.dataset.id ? "일정을 수정했습니다" : "일정을 추가했습니다");
+  } catch (e) { btn.disabled = false; btn.textContent = "저장"; toast("저장하지 못했습니다" + (e?.message ? ": " + e.message : "")); }
+}
+async function delItem(id) {
+  const it = allItems().find(x => x.id === id); if (!it) return;
+  try { await rpc("trip_item_remove", { p_id: id }); S.editId = null; await load(true);
+    toast(`‘${it.ti}’ 일정을 삭제했습니다`, { label: "되돌리기", fn: async () => { try { await rpc("trip_item_remove", { p_id: id, p_restore: true }); await load(true); toast("되살렸습니다"); } catch (e) { toast("되돌리지 못했습니다"); } } }); }
+  catch (e) { toast("삭제하지 못했습니다"); }
 }
 
 /* ── 정보: 예약·할 일·가이드 ── */
@@ -528,12 +561,13 @@ function openItem(id) {
     ${it.pl || it.lat != null ? `<div class="gmap"><iframe src="${esc(gEmbedPlace(it))}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="구글 지도: ${esc(it.pl || it.ti)}"></iframe></div>
     <div class="acts"><a class="btn primary" href="${esc(gNavUrl(it))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a><a class="btn" href="${esc(gPlaceUrl(it))}" target="_blank" rel="noopener">${SVG.map}구글 지도 앱</a></div>` : ""}
     ${it.t === "meal" && (it.day.dining || []).some(sl => sl.meal === mealOf(it)) ? `<div class="block"><button class="btn block" data-goto="dine" data-gday="${days().indexOf(it.day)}">다른 식당 후보 보기</button></div>` : ""}
+    <div class="block"><button class="btn block" data-edit-item="${it.id}">${SVG.memo}이 일정 수정</button></div>
     <div class="block"><div class="seg-ctl st-ctl" role="group" aria-label="일정 상태">${[["planned", "예정"], ["done", "완료"], ["skipped", "건너뜀"]].map(([k, l]) => `<button data-st="${it.id}:${k}" aria-pressed="${(it.st || "planned") === k}">${l}</button>`).join("")}</div></div>
     ${it.no ? `<div class="block"><div class="note">${esc(it.no)}</div></div>` : ""}
     ${guideHTML(S.curGuide)}
     ${bks.length ? `<div class="block"><h4>예약</h4>${bks.map(b => `<div class="card" style="box-shadow:none;background:var(--sunk);padding:12px"><div style="display:flex;gap:8px"><b style="flex:1">${esc(b.title)}</b>${pill(BSTAT[b.status][0], BSTAT[b.status][1])}</div>${kv(b)}</div>`).join("")}</div>` : ""}
     ${tg.length ? `<div class="block"><h4>알아둘 것</h4>${tg.map(x => x.k === "pick" ? `<div class="small">사람이 많은 곳입니다. 가방은 앞으로 메고 휴대폰은 안쪽 주머니에 두세요.</div>` : x.k === "rain" ? `<div class="small"><b>비가 오면</b> ${esc(x.alt)}</div>` : `<div class="small"><b>${esc(x.x.title)}</b> <span class="muted">${esc(x.x.body)}</span></div>`).join("")}</div>` : ""}
-    <div class="block"><h4>메모 ${ms.length ? ms.length + "개" : ""}</h4>${ms.map(m => `<div class="note" style="display:flex;gap:8px;align-items:flex-start"><span style="flex:1;white-space:pre-wrap">${esc(m.body)}<br><span class="small muted">${esc(who(m.author))}</span></span><button class="btn sm ghost" data-memo-edit="${m.id}">수정</button></div>`).join("")}
+    <div class="block"><h4>메모 ${ms.length ? ms.length + "개" : ""}</h4>${ms.map(m => `<div class="note" style="display:flex;gap:8px;align-items:flex-start"><span style="flex:1;white-space:pre-wrap">${esc(m.body)}<br><span class="small muted">${esc(who(m.author))}</span></span><button class="btn sm ghost" data-memo-edit="${m.id}">수정</button><button class="btn sm ghost" data-memo-del="${m.id}" style="color:var(--crit)">삭제</button></div>`).join("")}
       <form id="quick-memo" data-qitem="${it.id}" data-dayid="${it.day.id}" style="display:flex;gap:8px"><label class="sr" for="qm">이 일정에 메모</label><input id="qm" class="field" style="flex:1;border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--paper)" placeholder="이 일정에 메모 남기기" maxlength="4000"><button class="btn primary" type="submit">추가</button></form></div>`);
 }
 const guideFor = it => (D().guides || {})[it.pid != null ? "p" + it.pid : ""] || (D().guides || {})["i" + it.id];
@@ -577,7 +611,7 @@ function openDine(sid, oid) {
 
 /* ── 렌더 ── */
 function tabbar() {
-  const tabs = [["today", "오늘", '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'], ["plan", "일정", '<path d="M9 4l-6 2v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>'], ["dine", "식당", '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v6M9 3v6M17 21V3c-2 1-3 4-3 7s1 3 3 3"/>'], ["memo", "메모", '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>'], ["info", "예약·정보", '<path d="M4 7h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z"/>']];
+  const tabs = [["today", "오늘", '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'], ["plan", "일정", '<path d="M9 4l-6 2v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/>'], ["dine", "식당", '<path d="M7 3v8a2 2 0 0 0 2 2v8M5 3v6M9 3v6M17 21V3c-2 1-3 4-3 7s1 3 3 3"/>'], ["edit", "편집", '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>'], ["info", "예약·정보", '<path d="M4 7h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4z"/>']];
   return `<nav class="tabs" aria-label="메뉴"><div class="in">${tabs.map(([k, l, p]) => `<button data-tab="${k}" aria-selected="${S.tab === k}"><svg viewBox="0 0 24 24">${p}</svg>${l}</button>`).join("")}</div></nav>`;
 }
 function render() {
@@ -587,7 +621,7 @@ function render() {
   if (!S.data) { app.innerHTML = S.source === "error" ? `<div class="login"><h1>일정을 불러오지 못했습니다<span>인터넷 연결을 확인한 뒤 다시 시도해 주세요.</span></h1><button class="btn primary" data-reload>다시 시도</button></div>` : `<div class="boot"><div class="boot-mark">✈︎</div><p>일정을 불러오는 중</p></div>`; return; }
   if (S.sel == null) { const ci = curDayIdx(); S.sel = ci < 0 ? 0 : Math.min(ci, days().length - 1); }
   setCity(selDay());
-  const body = { today: viewToday, plan: viewPlan, dine: viewDine, memo: viewMemo, info: viewInfo }[S.tab]();
+  const body = ({ today: viewToday, plan: viewPlan, dine: viewDine, edit: viewEdit, info: viewInfo }[S.tab] || viewToday)();
   const synced = S.data.synced_at ? new Intl.DateTimeFormat("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Seoul" }).format(new Date(S.data.synced_at * 1000)) : "";
   const sy = window.scrollY;
   app.innerHTML = header() + `<main>${S.source === "cache" ? `<div class="offline">오프라인 저장본을 보여드리고 있습니다. 연결되면 자동으로 새로 불러옵니다.</div>` : ""}${body}
@@ -659,12 +693,12 @@ function openNearMe() {
 
 /* ── 이벤트 ── */
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me]");
+  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del]");
   if (!el) return;
   const ds = el.dataset;
-  if (ds.tab) { S.tab = ds.tab; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
+  if (ds.tab) { S.tab = ds.tab; S.editId = null; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
   if (ds.goto) { if (ds.gday != null) S.sel = +ds.gday; else if (S.tab === "today" && phase() === "during") S.sel = curDayIdx(); S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; closeSheet(); render(); window.scrollTo(0, 0); return; }
-  if (ds.day != null) { S.sel = +ds.day; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
+  if (ds.day != null) { S.sel = +ds.day; S.editId = null; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
   if (ds.step) { S.sel = Math.min(days().length - 1, Math.max(0, S.sel + +ds.step)); render(); window.scrollTo(0, 0); return; }
   if (ds.hst) { const [i, st] = ds.hst.split(":"); saveStatus(+i, st, false); return; }
   if (ds.nearMe != null) { openNearMe(); return; }
@@ -677,8 +711,12 @@ document.addEventListener("click", async e => {
   if (ds.info) { S.infoTab = ds.info; render(); return; }
   if (ds.memof) { S.memoFilter = ds.memof; render(); return; }
   if (ds.travel != null) { S.travelMode = S.travelMode === "walking" ? "transit" : "walking"; render(); return; }
-  if (ds.memoEdit) { S.editingMemo = +ds.memoEdit; S.tab = "memo"; closeSheet(); render(); window.scrollTo(0, 0); $("#memo-body")?.focus(); return; }
-  if (ds.memoDel) { removeMemo(+ds.memoDel); return; }
+  if (ds.memoEdit) { const m = (D().memos || []).find(x => x.id === +ds.memoEdit); const f = $("#quick-memo"); if (m && f) { f.dataset.mid = m.id; $("#qm").value = m.body; f.querySelector("button[type=submit]").textContent = "수정"; $("#qm").focus(); } return; }
+  if (ds.memoDel) { await removeMemo(+ds.memoDel); if (S.sheet?.type === "item") openItem(S.sheet.id); return; }
+  if (ds.editItem) { const it = allItems().find(x => x.id === +ds.editItem); if (it) S.sel = days().indexOf(it.day); S.tab = "edit"; S.editId = +ds.editItem; closeSheet(); render(); $(`#item-form`)?.scrollIntoView({ block: "center" }); return; }
+  if (ds.editOpen) { S.editId = ds.editOpen === "new" ? "new" : +ds.editOpen; render(); $(`#item-form`)?.scrollIntoView({ block: "center" }); $("#f-title")?.focus(); return; }
+  if (ds.editCancel != null) { S.editId = null; render(); return; }
+  if (ds.editDel) { delItem(+ds.editDel); return; }
   if (ds.memoCancel != null) { S.editingMemo = null; render(); return; }
   if (ds.copy != null) { try { await navigator.clipboard.writeText(ds.copy); toast("복사했습니다"); } catch (err) { toast(ds.copy); } return; }
   if (ds.phrase != null) { const lang = selDay().city === "파리" ? "fr" : "it"; const p = D().guide.phrases[+ds.phrase]; const o = document.createElement("div"); o.className = "overlay"; o.setAttribute("role", "dialog"); o.innerHTML = `<div class="big">${esc(p[lang])}</div><div class="alt">${esc(p.ko)}</div><button class="btn primary" style="align-self:flex-start">닫기</button>`; o.onclick = () => o.remove(); document.body.appendChild(o); return; }
@@ -706,13 +744,17 @@ document.addEventListener("submit", async e => {
     const ok = await saveMemo({ id, body: $("#memo-body").value, dayId: d?.id, itemId: +$("#memo-item").value || null, pinned: $("#memo-pin").checked });
     btn.disabled = false; if (ok) { S.editingMemo = null; render(); } return;
   }
+  if (f.id === "item-form") { await saveItem(f); return; }
   if (f.id === "quick-memo") {
-    const input = $("#qm"); const ok = await saveMemo({ body: input.value, dayId: +f.dataset.dayid, itemId: +f.dataset.qitem }); if (ok) { render(); openItem(+f.dataset.qitem); }
+    const input = $("#qm"); const ok = await saveMemo({ id: f.dataset.mid ? +f.dataset.mid : null, body: input.value, dayId: +f.dataset.dayid, itemId: +f.dataset.qitem }); if (ok) { render(); openItem(+f.dataset.qitem); }
   }
 });
 document.addEventListener("keydown", e => { if (e.key === "Escape") { closeSheet(); document.querySelector(".overlay")?.remove(); } });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && S.data && Date.now() - S.lastLoad > 60000) load(true); });
 window.addEventListener("online", () => { if (S.data) load(true); });
+/* 상단 시계는 탭과 상관없이 15초마다 갱신 */
+setInterval(() => { const c = $(".clock"); if (!c || !S.data) return; const d = selDay(); const t = now();
+  c.querySelector("b").textContent = hm(t, d?.tz); c.querySelector("span").textContent = `${d?.city || "현지"}${S.sim ? " 미리보기" : ""} · 서울 ${hm(t, "Asia/Seoul")}`; }, 15000);
 setInterval(() => { if (!S.sim && S.data && (S.tab === "today") && !S.sheet && !document.activeElement?.closest?.("form")) render(); }, 60000);
 
 /* ── 시작 ── */
