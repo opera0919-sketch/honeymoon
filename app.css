@@ -435,7 +435,7 @@ body{line-height:1.6}
 .slot-h{margin-bottom:12px}
 .more .nr{padding:11px 0}
 .deadline{margin-top:14px}
-@media (prefers-color-scheme: dark){ .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7)} }
+@media (prefers-color-scheme: dark){ .osm .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7)} }
 /* 편집 */
 .elist{padding:8px}
 .erow{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;text-align:left;padding:14px 12px;border-radius:12px}

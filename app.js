@@ -128,7 +128,7 @@ async function load(silent) {
   if (S.loading) return; S.loading = true;
   try {
     const d = await rpc("trip_app_export");
-    S.data = d; S.source = "live"; S.lastLoad = Date.now(); ls.set(CACHE_KEY, d);
+    S.data = d; S.source = "live"; S.lastLoad = Date.now(); ls.set(CACHE_KEY, d); syncGKey();
     if (!silent) toast("최신 일정을 불러왔습니다");
     geocodeMissing();
   } catch (e) {
@@ -175,11 +175,38 @@ function ensureMap() {
   }
   return map;
 }
-function setTiles() {
-  if (!map) return; if (tileLayer) map.removeLayer(tileLayer);
-  /* CARTO 무료 타일이 API 키 필수로 바뀌어(워터마크) OpenStreetMap 기본 타일 사용. 다크 모드는 CSS 필터로 어둡게 */
-  tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 기여자' }).addTo(map);
+/* 배경 지도: 구글 지도 키가 등록돼 있으면 구글 지도(GoogleMutant), 없거나 거부되면 OpenStreetMap.
+   CARTO 무료 타일은 API 키 필수로 바뀌어 쓰지 않음. 키는 앱의 예약·정보 → 지도 설정에서 관리자가 직접 입력(DB 저장). */
+const GKEY_LS = "hm-gmaps-v1";
+let gKey = ls.get(GKEY_LS) || null, gState = "off"; /* off | loading | ready | fail */
+const NIGHT = [{ elementType: "geometry", stylers: [{ color: "#242f3e" }] }, { elementType: "labels.text.stroke", stylers: [{ color: "#242f3e" }] }, { elementType: "labels.text.fill", stylers: [{ color: "#9aa4b2" }] },
+  { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#b9a37a" }] }, { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#263c3f" }] },
+  { featureType: "road", elementType: "geometry", stylers: [{ color: "#38414e" }] }, { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#212a37" }] },
+  { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#566174" }] }, { featureType: "transit", elementType: "geometry", stylers: [{ color: "#2f3948" }] },
+  { featureType: "water", elementType: "geometry", stylers: [{ color: "#17263c" }] }, { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#515c6d" }] }];
+function loadGoogle() {
+  if (gState !== "off" || !gKey) return; gState = "loading";
+  const fail = msg => { gState = "fail"; setTiles(); if (msg) toast(msg); };
+  window.gm_authFailure = () => fail("구글 지도 키가 거부되어 기본 지도로 표시합니다. 예약·정보 → 지도 설정을 확인해 주세요");
+  window.__hmGoogle = () => { const s2 = document.createElement("script"); s2.src = "https://unpkg.com/leaflet.gridlayer.googlemutant@0.16.0/dist/Leaflet.GoogleMutant.js";
+    s2.onload = () => { gState = "ready"; setTiles(); }; s2.onerror = () => fail(); document.head.appendChild(s2); };
+  const s1 = document.createElement("script");
+  s1.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(gKey)}&v=weekly&language=ko&region=KR&loading=async&callback=__hmGoogle`;
+  s1.onerror = () => fail(); document.head.appendChild(s1);
 }
+function setTiles() {
+  if (!map) return; if (tileLayer) { map.removeLayer(tileLayer); tileLayer = null; }
+  if (gKey && gState !== "fail") {
+    if (gState === "ready" && L.gridLayer?.googleMutant) { tileLayer = L.gridLayer.googleMutant({ type: "roadmap", maxZoom: 20, styles: dark() ? NIGHT : [] }).addTo(map); mapEl.classList.remove("osm"); return; }
+    loadGoogle();
+  }
+  tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> 기여자' }).addTo(map);
+  mapEl.classList.add("osm");
+}
+async function syncGKey() {
+  try { const k = (await rpc("trip_gmaps_key")) || null; if (k !== gKey) { gKey = k; ls.set(GKEY_LS, gKey); if (gState !== "ready") gState = "off"; setTiles(); } } catch (e) {}
+}
+const mapKind = () => !gKey ? "기본 지도(OpenStreetMap)" : gState === "ready" ? "구글 지도" : gState === "fail" ? "구글 지도 키 오류 → 기본 지도" : "구글 지도 불러오는 중";
 function mountMap() {
   const slot = $("#map-slot"); if (!slot) return;
   if (!ensureMap()) { slot.innerHTML = `<div class="map-fallback">지도를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.<br>아래 ‘구글 지도로 동선 열기’는 그대로 쓸 수 있습니다.</div>`; return; }
@@ -506,8 +533,8 @@ async function delItem(id) {
 /* ── 정보: 예약·할 일·가이드 ── */
 function viewInfo() {
   setCity(selDay());
-  const seg = `<div class="seg-ctl" role="group">${[["book", "예약"], ["todo", "할 일"], ["guide", "현지 가이드"]].map(([k, l]) => `<button data-info="${k}" aria-pressed="${S.infoTab === k}">${l}</button>`).join("")}</div>`;
-  return seg + (S.infoTab === "todo" ? infoTodo() : S.infoTab === "guide" ? infoGuide() : infoBook());
+  const seg = `<div class="seg-ctl" role="group">${[["book", "예약"], ["todo", "할 일"], ["guide", "현지 가이드"], ["map", "지도 설정"]].map(([k, l]) => `<button data-info="${k}" aria-pressed="${S.infoTab === k}">${l}</button>`).join("")}</div>`;
+  return seg + (S.infoTab === "todo" ? infoTodo() : S.infoTab === "guide" ? infoGuide() : S.infoTab === "map" ? infoMap() : infoBook());
 }
 function kv(b) {
   const r = [];
@@ -537,6 +564,20 @@ function infoBook() {
     <section class="card" style="margin:0 16px"><div class="gantt">${stays.map(s => { const a = (Date.parse(s.in) - Date.parse(st)) / DAY, w = (Date.parse(s.out) - Date.parse(s.in)) / DAY; return `<span class="nm">${esc(s.place)}</span><div class="track" style="--c:${CITY_VAR[s.city]}"><i style="left:${(a + .5) / tot * 100}%;width:${w / tot * 100}%"></i></div>`; }).join("")}</div>
       <div class="stack" style="margin-top:12px">${stays.map(s => `<div style="display:flex;gap:10px;align-items:center"><div style="flex:1;min-width:0"><b>${esc(s.place)}</b> ${pill(BSTAT[s.status || "unknown"][0], BSTAT[s.status || "unknown"][1])}<div class="small muted">${mdShort(s.in)} – ${mdShort(s.out)} · ${(Date.parse(s.out) - Date.parse(s.in)) / DAY}박${s.addr ? " · " + esc(s.addr) : ""}</div></div><a class="btn sm" href="${esc(gNavUrl({ ...s, pl: s.place, pll: s.local, a: s.addr }))}" target="_blank" rel="noopener">${SVG.nav}</a></div>`).join("")}</div></section>
     <div class="sec-h"><h2>입장권·투어</h2></div><div class="stack">${rest.map(bCard).join("")}</div>`;
+}
+function infoMap() {
+  return `<div class="sec-h"><h2>지도 설정</h2><span>지금: ${esc(mapKind())}</span></div>
+    <section class="card" style="margin:0 16px">
+      <p class="small" style="margin:0 0 12px">구글 지도 브라우저용 API 키를 넣으면 지도 배경이 구글 지도(한국어 지명)로 바뀝니다. 키는 두 분 계정만 읽을 수 있게 저장되고, 이 화면에는 끝 4자리만 보입니다.</p>
+      <form id="gkey-form" class="stack" style="gap:10px"><div class="field"><label for="gk">구글 지도 API 키 ${gKey ? `<small class="muted">등록됨 · …${esc(gKey.slice(-4))}</small>` : `<small class="muted">미등록</small>`}</label>
+        <input id="gk" type="password" autocomplete="off" spellcheck="false" placeholder="${gKey ? "바꾸려면 새 키 입력" : "AIza로 시작하는 키"}"></div>
+        <div style="display:flex;gap:8px">${gKey ? `<button type="button" class="btn" data-gkey-del style="color:var(--crit)">키 삭제</button>` : ""}<span style="flex:1"></span><button class="btn primary" type="submit">저장</button></div></form></section>
+    <div class="sec-h"><h2>키 만들 때 꼭 걸어 둘 제한</h2></div>
+    <section class="card" style="margin:0 16px"><ul class="lines" style="margin:0">
+      <li>Google Cloud 콘솔 → API 및 서비스 → ‘Maps JavaScript API’ 사용 설정(결제 계정 연결 필요)</li>
+      <li>사용자 인증 정보 → API 키 만들기 → 애플리케이션 제한: 웹사이트, <b>https://opera0919-sketch.github.io/*</b></li>
+      <li>API 제한: <b>Maps JavaScript API</b> 하나만 선택</li>
+      <li>브라우저용 키는 앱을 쓰는 화면에서 원래 보이는 값입니다. 안전장치는 비밀 유지가 아니라 위 두 가지 제한입니다.</li></ul></section>`;
 }
 function infoTodo() {
   const ts = [...(D().todos || [])].sort((a, b) => (a.done - b.done) || ((a.due || 9e12) - (b.due || 9e12)));
@@ -698,15 +739,24 @@ function openNearMe() {
     () => { const u = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("restaurants near me"); if (w) w.location.href = u; else fallback(); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 120000 });
 }
 
+async function saveGKey(v) {
+  try { await rpc("trip_gmaps_key_set", { p_key: v }); gKey = v; ls.set(GKEY_LS, gKey);
+    /* 구글 지도 스크립트는 한 페이지에 한 번만 불러올 수 있어, 이미 불러온 뒤 키를 바꾸면 새로 연다 */
+    if (v && window.google?.maps) { toast("키를 저장했습니다. 적용을 위해 새로 엽니다"); setTimeout(() => location.reload(), 900); return; }
+    gState = "off"; setTiles(); render(); toast(v ? "구글 지도 키를 저장했습니다. 지도 탭에서 확인해 주세요" : "키를 삭제했습니다. 기본 지도로 표시합니다"); }
+  catch (e) { toast(String(e?.message || "").includes("bad_key") ? "키 형식이 맞지 않습니다" : "저장하지 못했습니다"); }
+}
+
 /* ── 이벤트 ── */
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus]");
+  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus],[data-gkey-del]");
   if (!el) return;
   const ds = el.dataset;
   if (ds.tab) { S.tab = ds.tab; S.editId = null; S.focus = null; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
   if (ds.goto) { if (ds.gday != null) S.sel = +ds.gday; else if (S.tab === "today" && phase() === "during") S.sel = curDayIdx(); S.tab = ds.goto; if (ds.goto === "dine") S.dineFilter = "day"; closeSheet(); render(); window.scrollTo(0, 0); return; }
   if (ds.day != null) { S.sel = +ds.day; S.editId = null; S.focus = null; if (S.tab === "today" && phase() === "during" && !S.sim) S.tab = "plan"; closeSheet(); render(); return; }
   if (ds.step) { S.sel = Math.min(days().length - 1, Math.max(0, S.sel + +ds.step)); render(); window.scrollTo(0, 0); return; }
+  if (ds.gkeyDel != null) { await saveGKey(null); return; }
   if (ds.hfocus != null) { S.focus = +ds.hfocus < 0 ? null : +ds.hfocus; render(); return; }
   if (ds.hst) { const [i, st] = ds.hst.split(":"); saveStatus(+i, st, false); return; }
   if (ds.nearMe != null) { openNearMe(); return; }
@@ -753,6 +803,7 @@ document.addEventListener("submit", async e => {
     btn.disabled = false; if (ok) { S.editingMemo = null; render(); } return;
   }
   if (f.id === "item-form") { await saveItem(f); return; }
+  if (f.id === "gkey-form") { const v = $("#gk").value.trim(); if (!v) { toast("키를 입력해 주세요"); return; } await saveGKey(v); return; }
   if (f.id === "quick-memo") {
     const input = $("#qm"); const ok = await saveMemo({ id: f.dataset.mid ? +f.dataset.mid : null, body: input.value, dayId: +f.dataset.dayid, itemId: +f.dataset.qitem }); if (ok) { render(); openItem(+f.dataset.qitem); }
   }
