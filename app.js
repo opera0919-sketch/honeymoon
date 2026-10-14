@@ -730,13 +730,25 @@ async function removeMemo(id) {
   catch (e) { ms.splice(i, 0, m); render(); toast("삭제하지 못했습니다"); }
 }
 
-/* 내 위치 주변 식당 (위치 권한이 없으면 구글 지도가 현재 위치 기준으로 검색) */
+/* 내 위치 주변 식당
+   빈 창(about:blank)을 먼저 열고 위치를 받은 뒤 주소를 바꾸는 방식은 모바일·홈 화면 앱에서 빈 창으로 남는다.
+   그래서 위치를 앱 안에서 먼저 받고, 받은 좌표로 만든 실제 링크를 시트에 보여 준다(누르면 사용자 동작으로 바로 열림). */
+const nearUrl = (q, lat, lng) => lat != null ? `https://www.google.com/maps/search/${encodeURIComponent(q)}/@${lat.toFixed(6)},${lng.toFixed(6)},17z` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q + " near me")}`;
+function nearSheet(lat, lng, msg) {
+  $(".toast")?.remove();
+  const a = (q, l, cls) => `<a class="btn ${cls} block" href="${esc(nearUrl(q, lat, lng))}" target="_blank" rel="noopener">${SVG.pin}${l}</a>`;
+  showSheet(`<h3>내 위치 주변</h3><div class="sub">${esc(msg)}</div>
+    <div class="block">${a("restaurants", "주변 식당 보기", "primary")}${a("cafe", "주변 카페 보기", "")}</div>
+    <p class="small muted" style="margin:10px 0 0">구글 지도 앱이나 새 탭에서 열립니다.</p>`);
+  S.sheet = { type: "near" };
+}
 function openNearMe() {
-  const fallback = () => window.open("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("restaurants near me"), "_blank", "noopener");
-  if (!navigator.geolocation) { fallback(); return; }
-  const w = window.open("about:blank", "_blank"); toast("현재 위치를 확인하는 중입니다");
-  navigator.geolocation.getCurrentPosition(p => { const u = `https://www.google.com/maps/search/restaurants/@${p.coords.latitude.toFixed(6)},${p.coords.longitude.toFixed(6)},17z`; if (w) w.location.href = u; else window.open(u, "_blank", "noopener"); },
-    () => { const u = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("restaurants near me"); if (w) w.location.href = u; else fallback(); }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 120000 });
+  if (!navigator.geolocation) { nearSheet(null, null, "이 기기에서는 위치를 확인할 수 없어 구글 지도의 현재 위치 검색으로 엽니다."); return; }
+  toast("현재 위치를 확인하는 중입니다");
+  navigator.geolocation.getCurrentPosition(
+    p => nearSheet(p.coords.latitude, p.coords.longitude, `현재 위치 기준 (오차 약 ${Math.round(p.coords.accuracy)}m)`),
+    e => nearSheet(null, null, e.code === 1 ? "위치 권한이 꺼져 있어 구글 지도의 현재 위치 검색으로 엽니다." : "위치를 확인하지 못해 구글 지도의 현재 위치 검색으로 엽니다."),
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 120000 });
 }
 
 async function saveGKey(v) {
