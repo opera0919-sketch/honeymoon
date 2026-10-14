@@ -165,7 +165,7 @@ let map = null, mapEl = null, layer = null, markerById = {}, tileLayer = null;
 const dark = () => matchMedia("(prefers-color-scheme: dark)").matches;
 function ensureMap() {
   if (!window.L) return null;
-  if (!mapEl) { mapEl = document.createElement("div"); mapEl.id = "map"; }
+  if (!mapEl) { mapEl = document.createElement("div"); mapEl.id = "map"; mapEl.style.cssText = "position:absolute;inset:0"; /* L.map 생성 시 DOM 밖이면 Leaflet이 position:relative 를 인라인으로 넣어 높이 0이 됨 → 미리 지정 */ }
   if (!map) {
     map = L.map(mapEl, { zoomControl: false, attributionControl: true, tap: true });
     L.control.zoom({ position: "topright" }).addTo(map);
