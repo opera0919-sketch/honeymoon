@@ -468,7 +468,26 @@ function viewDine() {
     <div class="chips" role="group" aria-label="보기">${[["day", `Day ${day.n} · ${mdShort(day.date)}`], ["open", "아직 안 고른 끼니"], ["all", "전체 일정"]].map(([k, l]) => `<button class="chip" data-dinef="${k}" aria-pressed="${f === k}">${l}</button>`).join("")}</div>
     ${f === "day" && list.length ? `<div class="mapcard" style="height:240px;min-height:0"><div id="map-slot" style="position:absolute;inset:0"></div></div>` : ""}
     <div class="stack" style="margin-top:12px">${list.length ? list.map(slotCard).join("") : `<div class="empty">${f === "day" ? `Day ${day.n}에는 미리 골라 둔 식당 후보가 없습니다.<br>아래에서 주변 식당을 찾아보세요.` : "조건에 맞는 끼니가 없습니다."}</div>`}</div>
+    ${spotsSection(day)}
     ${more}`;
+}
+/* 가볼 만한 곳: 추천받은 장소(카페·비스트로·재즈바·마트 등)를 그날 동선에서 가까운 순으로 */
+function spotsSection(day) {
+  const all = (D().spots || []).filter(x => x.city === day.city); if (!all.length) return "";
+  const cats = []; all.forEach(x => { if (!cats.some(c => c[0] === x.cat)) cats.push([x.cat, x.catl || x.cat]); });
+  const cat = cats.some(c => c[0] === S.spotCat) ? S.spotCat : "all";
+  const stops = dayStops(day).filter(s => hasLL(s) && s.cat !== "airport");
+  const near = x => hasLL(x) && stops.length ? Math.min(...stops.map(s => kmBetween(s, x))) : null;
+  const list = all.filter(x => cat === "all" || x.cat === cat).map(x => ({ x, d: near(x) })).sort((a, b) => (a.d ?? 99) - (b.d ?? 99));
+  const shown = S.spotAll ? list : list.slice(0, 8);
+  const inDay = x => (day.items || []).some(it => it.pid === x.pid);
+  const dl = (d, x) => inDay(x) ? "이날 일정에 포함" : d == null ? "" : d < 0.05 ? "동선 바로 옆" : d < 1 ? `동선에서 약 ${Math.round(d * 1000 / 10) * 10}m` : `동선에서 약 ${d.toFixed(1)}km`;
+  return `<div class="sec-h"><h2>가볼 만한 곳</h2><span>숙소 추천 ${all.length}곳 · 동선 가까운 순</span></div>
+    <div class="chips" role="group" aria-label="분류">${[["all", "전체"], ...cats].map(([k, l]) => `<button class="chip" data-spotcat="${esc(k)}" aria-pressed="${cat === k}">${esc(l)}${k === "all" ? "" : ` ${all.filter(x => x.cat === k).length}`}</button>`).join("")}</div>
+    <section class="card spots" style="margin:12px 16px 0">${shown.map(({ x, d }) => `<div class="opt"><div class="hd"><b>${esc(x.n)}</b>${pill(x.catl || x.cat, "p-mute")}</div>
+      <div class="meta">${esc([dl(d, x), x.h].filter(Boolean).join(" · "))}${x.chk ? `${dl(d, x) || x.h ? " · " : ""}영업시간 확인 필요` : ""}</div>${x.no ? `<div class="small">${esc(x.no)}</div>` : ""}${x.a ? `<div class="small muted">${esc(x.a)}</div>` : ""}
+      <div class="acts"><a class="btn sm" href="${esc(gNavUrl(x))}" target="_blank" rel="noopener">${SVG.nav}길찾기</a><a class="btn sm" href="${esc(gPlaceUrl(x))}" target="_blank" rel="noopener">${SVG.map}구글 지도</a></div></div>`).join("")}
+      ${list.length > 8 ? `<button class="btn block" data-spotmore>${S.spotAll ? "접기" : `${list.length - 8}곳 더 보기`}</button>` : ""}</section>`;
 }
 
 /* ── 일정 편집 ── */
@@ -761,7 +780,7 @@ async function saveGKey(v) {
 
 /* ── 이벤트 ── */
 document.addEventListener("click", async e => {
-  const el = e.target.closest("[data-tab],[data-day],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus],[data-gkey-del]");
+  const el = e.target.closest("[data-tab],[data-day],[data-spotcat],[data-spotmore],[data-item],[data-step],[data-dinef],[data-pick],[data-dine],[data-copy],[data-goto],[data-phrase],[data-info],[data-travel],[data-memof],[data-memo-edit],[data-memo-del],[data-memo-cancel],[data-reload],[data-logout],[data-sim-open],[data-sim-off],[data-st],[data-gimg],[data-hst],[data-near-me],[data-edit-item],[data-edit-open],[data-edit-cancel],[data-edit-del],[data-hfocus],[data-gkey-del]");
   if (!el) return;
   const ds = el.dataset;
   if (ds.tab) { S.tab = ds.tab; S.editId = null; S.focus = null; if (ds.tab === "today" && phase() === "during" && !S.sim) S.sel = curDayIdx(); closeSheet(); render(); window.scrollTo(0, 0); return; }
@@ -776,6 +795,8 @@ document.addEventListener("click", async e => {
   if (ds.gimg != null) { openGuideImg(S.curGuide, +ds.gimg); return; }
   if (ds.item) { openItem(+ds.item); return; }
   if (ds.dinef) { S.dineFilter = ds.dinef; render(); return; }
+  if (ds.spotcat) { S.spotCat = ds.spotcat; S.spotAll = false; render(); return; }
+  if (ds.spotmore != null) { S.spotAll = !S.spotAll; render(); return; }
   if (ds.dine) { const [a, b] = ds.dine.split(":").map(Number); openDine(a, b); return; }
   if (ds.pick) { const [a, b] = ds.pick.split(":").map(Number); savePick(a, b); return; }
   if (ds.info) { S.infoTab = ds.info; render(); return; }
